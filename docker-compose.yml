@@ -1,0 +1,41 @@
+# docker-compose for local dev: app + Redis. One command, both up.
+#   docker compose up --build
+# Then open http://localhost:3000 for the dashboard.
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: "3000"
+      NODE_ENV: "production"
+      REDIS_URL: "redis://redis:6379"
+      ALGORITHM: "token-bucket"
+      WINDOW_MS: "60000"
+      LIMIT: "60"
+      BURST: "20"
+      KEY_STRATEGY: "ip"
+      DASHBOARD_ENABLED: "true"
+      # Tighter login limit for the demo — interviewer-friendly
+      ROUTES_JSON: '{"POST /api/login":{"limit":5,"windowMs":60000,"burst":0,"algorithm":"fixed-window"},"GET /api/search":{"limit":100,"windowMs":60000,"burst":50}}'
+    ports:
+      - "3000:3000"
+
+volumes:
+  redis-data:

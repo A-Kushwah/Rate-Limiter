@@ -1,0 +1,36 @@
+{
+  "name": "rate-limiter",
+  "version": "1.0.0",
+  "description": "Production-grade distributed API rate limiter with multiple algorithms, Redis-backed atomic counters, real-time dashboard, and load-test evidence.",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "test": "node --test tests/algorithms.test.js",
+    "test:unit": "node --test tests/algorithms.test.js",
+    "load": "node scripts/loadtest.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ioredis": "^5.4.1",
+    "morgan": "^1.10.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "autocannon": "^7.15.0",
+    "ioredis-mock": "^8.13.1"
+  },
+  "keywords": [
+    "rate-limiter",
+    "redis",
+    "token-bucket",
+    "sliding-window",
+    "api"
+  ],
+  "license": "MIT"
+}
