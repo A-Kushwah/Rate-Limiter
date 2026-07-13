@@ -14,9 +14,9 @@ const { subscribe, snapshot } = require('../src/events');
 const demoApi = require('../src/demo/api');
 
 async function main() {
-  // Redis must be up before we can load scripts. If it's not, we still
-  // start the HTTP server (so /health can report degraded) but every
-  // request will fail open with an X-RateLimit-Error header.
+  // Redis has to be available before the limiter can do its job, but I
+  // still want the health endpoint and dashboard to come up even if Redis
+  // is down for a bit.
   try {
     await connectRedis();
     await loadScripts();
@@ -104,7 +104,7 @@ async function main() {
     }
   });
 
-  // Soft-restart the WebSocket server if Redis comes back. Cheap reconnect.
+  // Re-load the scripts if Redis comes back after a restart or blip.
   redis.on('ready', async () => {
     try { await loadScripts(); } catch (e) { console.error('re-load scripts:', e.message); }
   });
@@ -113,7 +113,7 @@ async function main() {
     console.log(`[boot] listening on :${config.port} (algo=${config.algorithm})`);
   });
 
-  // Graceful shutdown so Render/Railway don't SIGKILL mid-request.
+  // Graceful shutdown so a deploy or restart does not leave requests hanging.
   const shutdown = (sig) => () => {
     console.log(`[shutdown] ${sig}`);
     server.close(() => process.exit(0));

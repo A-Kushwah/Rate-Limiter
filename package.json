@@ -1,7 +1,7 @@
 {
   "name": "rate-limiter",
   "version": "1.0.0",
-  "description": "Production-grade distributed API rate limiter with multiple algorithms, Redis-backed atomic counters, real-time dashboard, and load-test evidence.",
+  "description": "A small Node and Redis rate-limiter project for comparing algorithms and watching behavior under load.",
   "main": "server/index.js",
   "type": "commonjs",
   "scripts": {

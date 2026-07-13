@@ -1,7 +1,7 @@
 'use strict';
 
-// Tiny pub/sub for live dashboard events. WebSocket server subscribes;
-// middleware publishes. Module-level singleton, no need for a bus.
+// A simple pub/sub layer for the dashboard. The WebSocket server subscribes,
+// the limiter publishes, and everything stays in-process.
 
 let subscribers = new Set();
 let buffer = []; // ring buffer of recent events for late-joining clients

@@ -5,10 +5,9 @@ const { rateLimiter } = require('../middleware/limiter');
 
 const router = express.Router();
 
-// In a real app these would be real handlers (DB lookups, auth checks). Here
-// they're stubs that just return JSON so the focus stays on the limiter. The
-// per-endpoint limit values are illustrative; the real config lives in
-// ROUTES_JSON and can be changed without touching code.
+// These are just stand-ins for real handlers. The point here is the limiter,
+// not the business logic. The per-endpoint limits are configurable through
+// ROUTES_JSON so they can be adjusted without changing the code.
 
 router.get('/search', rateLimiter({ scope: 'GET /api/search' }), (req, res) => {
   res.json({
@@ -20,9 +19,9 @@ router.get('/search', rateLimiter({ scope: 'GET /api/search' }), (req, res) => {
 });
 
 router.post('/login', rateLimiter({ scope: 'POST /api/login' }), (req, res) => {
-  // Login is sensitive — a strict limit here is exactly the use case
-  // interviewers ask about. (In a real system you'd also have captcha,
-  // backoff, account lockout, etc.)
+  // Login is one of the easier places to justify a stricter limit.
+  // In a real system I'd also add captcha, backoff, or account lockout,
+  // but this is enough to show the behavior.
   res.json({ ok: true, token: 'demo-' + Math.random().toString(36).slice(2), ts: Date.now() });
 });
 

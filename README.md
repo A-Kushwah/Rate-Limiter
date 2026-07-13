@@ -1,15 +1,15 @@
 # Rate Limiter
 
-A production-grade, distributed API rate limiter. Five algorithms, Redis-backed atomic state, real-time dashboard, live-deployed demo, and load-test evidence.
+A small Node + Redis project for comparing a few rate-limiting strategies side by side. I wanted something I could run locally, throw traffic at, and watch how each algorithm behaves.
 
 > **Live demo:** [add your URL here after deploying]
 > **Dashboard:** [add your URL here]/  (the `/` route is the live dashboard)
 
 ---
 
-## Why this exists
+## Why I built it
 
-A rate limiter is one of the most commonly-broken pieces of production infrastructure. The naive implementation (`INCR` + check) has a race condition under concurrency; the lazy implementation (in-memory only) doesn't survive a deploy. This project gets the hard parts right — atomic Redis Lua scripts, correct headers, configurable per-route limits, an algorithm dropdown you can flip at runtime — and makes the behaviour visible in a dashboard so the design choices are obvious to an interviewer.
+I kept running into the gap between reading about rate limiting and actually seeing it behave under pressure. The simple version works fine in a toy example, but it falls apart once requests hit at the same time. This project is mostly a sandbox for that: Redis-backed checks, a few different algorithms, and a basic dashboard so the behavior is visible instead of abstract.
 
 ---
 
@@ -23,15 +23,15 @@ A rate limiter is one of the most commonly-broken pieces of production infrastru
                                             │  HTTP / WebSocket
                                             ▼
 ┌───────────────────────────────────────────────────────────────────────┐
-│                       Express server (Node.js)                       │
+│                       Express server (Node.js)                        │
 │  ┌──────────────┐    ┌──────────────────────────┐    ┌─────────────┐  │
 │  │ Demo API     │ ←→ │  rate-limit middleware   │ ←→ │  events     │  │
 │  │ /api/search  │    │  (resolves key, picks    │    │  pub/sub    │  │
-│  │ /api/login   │    │   algorithm, sets Hdrs,   │    │  (in-proc)  │  │
-│  │ /api/me      │    │   emits dashboard event)  │    └─────┬───────┘  │
+│  │ /api/login   │    │   algorithm, sets Hdrs,  │    │  (in-proc)  │  │
+│  │ /api/me      │    │   emits dashboard event) │    └─────┬───────┘  │
 │  │ /api/expensive│   └────────────┬─────────────┘          │          │
-│  └──────────────┘                │                        │          │
-│                                  ▼                        ▼          │
+│  └──────────────┘                │                         │          │
+│                                  ▼                         ▼          │
 │                       ┌──────────────────────┐   ┌──────────────────┐ │
 │                       │  algorithms/check()  │   │  WebSocket /ws   │ │
 │                       │  (5 algos, uniform   │   │  → dashboard     │ │
@@ -62,7 +62,7 @@ A rate limiter is one of the most commonly-broken pieces of production infrastru
 
 ---
 
-## Algorithms — explained like you'd explain in an interview
+## How the algorithms differ
 
 | Algorithm | Memory / key | Accuracy | Burst behavior | Best for |
 |---|---|---|---|---|
@@ -225,11 +225,11 @@ That asymmetry (10 OK, 4990 blocked) is the proof: the limiter held the line at 
 
 ## Deployment — Render (free tier, recommended)
 
-I'm picking Render over Railway/Fly.io because:
-- **Free** web service tier (spins down after 15 min of idle, but that's fine for a portfolio demo and the cold start is ~5s).
+I picked Render here because it was the easiest setup for a simple demo:
+- **Free** web service tier (it spins down after 15 minutes of idle, but that is fine for a portfolio-style demo).
 - **Free** Redis via Upstash (Render's own Key Value Store is paid-only).
-- The Dockerfile path is first-class; no platform-specific buildpack quirks.
-- One-click deploy from a GitHub repo, with the public URL on a `*.onrender.com` subdomain.
+- The Dockerfile works cleanly without much platform-specific fuss.
+- It gives me a public URL on a `*.onrender.com` subdomain without much setup.
 
 ### Steps
 
@@ -266,9 +266,9 @@ Fly.io's free tier gives you 3 shared VMs with 256MB each, which fits both the a
 
 ---
 
-## How I'd scale this further
+## If I wanted to scale this further
 
-The current design handles the load of a single small-to-medium API on one Redis. Here are the steps to take it further, in roughly increasing order of complexity:
+This setup is enough for a small-to-medium API on one Redis. If I wanted to push it further, the next steps would be:
 
 1. **Redis with replicas + Sentinel/Cluster.** When one box can no longer keep up with the Lua call rate, shard by client. A common pattern: `shard = crc16(clientId) % N`, route to one of N Redis primaries. The Lua scripts are already key-namespaced; you just need a consistent-hash layer in front.
 
@@ -324,18 +324,16 @@ The current design handles the load of a single small-to-medium API on one Redis
 
 ---
 
-## Interview talk track
+## Notes for future me
 
-- **Five algorithms, same interface.** The middleware doesn't know or care which one is active; the dispatcher in `src/algorithms/index.js` is the only place algorithm names appear. Switching algorithms is a config change or a one-line HTTP call.
+- **One interface, several algorithms.** The middleware does not care which limiter is active; the dispatcher in `src/algorithms/index.js` is the only place the algorithm name really matters. Switching algorithms is mostly a config change or a small HTTP request.
 
-- **Atomicity in Redis via Lua.** The whole project hinges on this. I'll walk through the token-bucket Lua: read last state, compute refill, allow or block, write back — all in one server-side call. This is what prevents the classic "INCR without EXPIRE" bug and the "1000 concurrent requests all got through" bug.
+- **The Redis/Lua part is the core.** The important bit is that the state change happens in one Redis-side operation. That is what avoids the classic race where a burst slips through because two requests read and write around the same time.
 
-- **Fail-open on Redis outage.** When Redis is down, the limiter logs and lets the request through with an `X-RateLimit-Error` header. In a payment system you'd fail closed; for a portfolio API the trade-off is "rate limiter outage" vs "API outage", and the first is much less visible to users.
+- **Redis downtime is handled loosely.** If Redis is unavailable, the app still serves requests and adds an `X-RateLimit-Error` header so the behavior is visible instead of silently failing.
 
-- **Per-route overrides via `ROUTES_JSON`.** `/api/login` is 5/min fixed-window; `/api/search` is 100/min token-bucket with 50 burst. The middleware picks the most specific prefix match.
+- **Per-route overrides live in `ROUTES_JSON`.** The login endpoint is intentionally stricter than search, and the middleware picks the most specific prefix match.
 
-- **Live dashboard as the "wow" piece.** Open the deployed URL, switch from token-bucket to fixed-window, hit the fire button — the chart immediately changes shape. Token bucket allows a burst then refills; fixed window blocks cleanly at the boundary. Visual proof the algorithms behave differently.
+- **The dashboard is mostly there to make behavior visible.** Switching from token-bucket to fixed-window changes the pattern immediately, which is useful when I want to compare algorithms without reading code.
 
-- **Scaling notes.** I'd shard Redis by client hash for horizontal scale, add edge rate limiting at Cloudflare for first-line defense, and replace sliding-log's per-request memory with a probabilistic counter (t-digest) for very high-cardinality clients. The O(1)-memory algorithms (fixed window, sliding window hybrid, token bucket, leaky bucket) are the only ones that survive a million active clients.
-
-- **What I'd add next.** Prometheus metrics, OpenTelemetry traces on the Lua call, and a `X-RateLimit-Reason` header on 429s so client misbehavior is debuggable from the response alone.
+- **If I keep going, I’d probably add metrics and better debug headers.** Prometheus-style counters and a `X-RateLimit-Reason` header would be the next useful pieces.

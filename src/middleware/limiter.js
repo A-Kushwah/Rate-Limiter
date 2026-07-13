@@ -5,7 +5,7 @@ const { check } = require('../algorithms');
 const { emit } = require('../events');
 
 // Resolve a client identifier for a given request based on KEY_STRATEGY.
-// `composite` joins whatever's available with a separator Redis keys tolerate.
+// The composite case just concatenates whatever is available.
 function resolveId(strategy, req) {
   const apiKey = req.get('x-api-key') || null;
   const userId = (req.user && req.user.id) || req.get('x-user-id') || null;
@@ -53,9 +53,9 @@ function setRateLimitHeaders(res, result, opts) {
   }
 }
 
-// Build the middleware factory. `routeOverride` lets the demo app mount the
-// limiter with a fixed scope like "GET /login" rather than re-deriving it
-// from req — cleaner and faster on the hot path.
+// Build the middleware factory. The demo app mounts the limiter with a
+// fixed scope like "GET /login" so it does not need to reconstruct it from
+// the request every time.
 function rateLimiter(opts = {}) {
   const scope = opts.scope || '__default__';
 

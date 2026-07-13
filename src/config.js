@@ -1,7 +1,7 @@
 'use strict';
 
-// Centralised config. Read once at boot, fail loud on misconfig so deploy
-// failures show up immediately rather than as silent 500s in production.
+// One place for app config. I parse the environment once at startup so the
+// rest of the app can assume the values are already normalized.
 
 require('dotenv').config();
 

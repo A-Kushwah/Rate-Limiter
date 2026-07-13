@@ -5,10 +5,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { client } = require('../redis');
 
-// Pre-load all Lua scripts at boot. SCRIPT LOAD returns a SHA1 we then use
-// with EVALSHA for cheap execution; ioredis will fall back to EVAL on
-// NOSCRIPT and reload transparently, so we don't need to manage the cache
-// ourselves.
+// Load the Lua scripts once at boot. SCRIPT LOAD returns a SHA1 that I can
+// reuse with EVALSHA for cheap execution; ioredis will fall back to EVAL on
+// NOSCRIPT if needed.
 
 const SCRIPTS = {
   'fixed-window': fs.readFileSync(path.join(__dirname, '..', 'lua/fixed_window.lua'), 'utf8'),
