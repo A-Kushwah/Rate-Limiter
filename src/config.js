@@ -3,6 +3,7 @@
 // One place for app config. I parse the environment once at startup so the
 // rest of the app can assume the values are already normalized.
 
+const { URL } = require('url');
 require('dotenv').config();
 
 const ALGORITHMS = new Set([
@@ -41,6 +42,21 @@ function parseRoutes(raw) {
   }
 }
 
+function parseRedisUrl(raw) {
+  if (!raw || !raw.trim()) return 'redis://127.0.0.1:6379';
+  const value = raw.trim();
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+      throw new Error(`Unsupported protocol ${parsed.protocol}`);
+    }
+    return parsed.toString();
+  } catch (e) {
+    console.error(`[config] Invalid REDIS_URL: ${value}. Expected redis://... or rediss://... Falling back to localhost Redis.`);
+    return 'redis://127.0.0.1:6379';
+  }
+}
+
 const algorithm = (process.env.ALGORITHM || 'token-bucket').trim();
 if (!ALGORITHMS.has(algorithm)) {
   throw new Error(`Invalid ALGORITHM: ${algorithm}. Must be one of: ${[...ALGORITHMS].join(', ')}`);
@@ -54,7 +70,7 @@ if (!STRATEGIES.has(keyStrategy)) {
 module.exports = {
   port: parseInt10(process.env.PORT, 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
-  redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+  redisUrl: parseRedisUrl(process.env.REDIS_URL),
   algorithm,
   windowMs: parseInt10(process.env.WINDOW_MS, 60_000),
   limit: parseInt10(process.env.LIMIT, 60),
