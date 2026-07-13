@@ -109,8 +109,14 @@ async function main() {
     try { await loadScripts(); } catch (e) { console.error('re-load scripts:', e.message); }
   });
 
-  server.listen(config.port, () => {
-    console.log(`[boot] listening on :${config.port} (algo=${config.algorithm})`);
+  const host = process.env.HOST || '0.0.0.0';
+  server.listen(config.port, host, () => {
+    console.log(`[boot] listening on ${host}:${config.port} (algo=${config.algorithm})`);
+  });
+
+  server.on('error', (err) => {
+    console.error('[server] failed to start:', err.message);
+    process.exit(1);
   });
 
   // Graceful shutdown so a deploy or restart does not leave requests hanging.
