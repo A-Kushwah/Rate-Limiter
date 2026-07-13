@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Rate Limiter — Live Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0e1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --green: #2ea043;
+      --red: #f85149;
+      --blue: #58a6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background: var(--bg); color: var(--text);
+    }
+    header {
+      padding: 16px 24px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+    header .meta { color: var(--muted); font-size: 13px; }
+    .container { display: grid; grid-template-columns: 320px 1fr; gap: 16px; padding: 16px; }
+    @media (max-width: 800px) { .container { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+    }
+    .panel h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px; }
+    select, input, button {
+      width: 100%; padding: 8px 10px; background: #0d1117;
+      color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+      font-size: 14px;
+    }
+    button { cursor: pointer; background: var(--blue); color: #fff; border: none; font-weight: 600; }
+    button:hover { opacity: 0.9; }
+    button.secondary { background: #21262d; color: var(--text); border: 1px solid var(--border); }
+    button.danger { background: var(--red); }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+    .stat { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+    .stat .v { font-size: 20px; font-weight: 600; }
+    .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+    .stat.green .v { color: var(--green); }
+    .stat.red .v { color: var(--red); }
+    #chart-wrap { height: 360px; }
+    #log { height: 200px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
+    #log .allowed { color: var(--green); }
+    #log .blocked { color: var(--red); }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .pill.green { background: rgba(46,160,67,0.15); color: var(--green); }
+    .pill.red { background: rgba(248,81,73,0.15); color: var(--red); }
+    .ws-state { font-size: 12px; }
+    .ws-state.ok { color: var(--green); }
+    .ws-state.bad { color: var(--red); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Rate Limiter — Live Dashboard</h1>
+      <div class="meta">Algorithm comparison &middot; real-time request stream</div>
+    </div>
+    <div class="meta">
+      WS: <span id="ws-state" class="ws-state bad">disconnected</span>
+    </div>
+  </header>
+
+  <div class="container">
+    <aside class="panel">
+      <h2>Controls</h2>
+      <label>Algorithm (active)</label>
+      <select id="algo">
+        <option value="token-bucket">token-bucket</option>
+        <option value="leaky-bucket">leaky-bucket</option>
+        <option value="fixed-window">fixed-window</option>
+        <option value="sliding-window">sliding-window</option>
+        <option value="sliding-log">sliding-log</option>
+      </select>
+
+      <label>Endpoint</label>
+      <select id="endpoint">
+        <option value="GET /api/search">GET /api/search</option>
+        <option value="POST /api/login">POST /api/login</option>
+        <option value="GET /api/me">GET /api/me</option>
+        <option value="GET /api/expensive">GET /api/expensive</option>
+      </select>
+
+      <label>Requests / burst</label>
+      <div class="row">
+        <input id="n" type="number" value="20" min="1" max="500" />
+        <input id="rps" type="number" value="5" min="1" max="100" title="requests per second in the loop" />
+      </div>
+
+      <div class="row" style="margin-top: 12px;">
+        <button id="fire">Fire once</button>
+        <button id="loop" class="secondary">Auto-fire</button>
+        <button id="stop" class="secondary" disabled>Stop</button>
+      </div>
+      <div class="row" style="margin-top: 8px;">
+        <button id="clear" class="secondary">Clear log</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat green"><div class="v" id="allowed-count">0</div><div class="l">Allowed</div></div>
+        <div class="stat red"><div class="v" id="blocked-count">0</div><div class="l">Blocked</div></div>
+        <div class="stat"><div class="v" id="rps-now">0</div><div class="l">RPS</div></div>
+        <div class="stat"><div class="v" id="last-quota">–</div><div class="l">Remaining</div></div>
+      </div>
+    </aside>
+
+    <section>
+      <div class="panel">
+        <h2>Rate over time (last 60s) — allowed vs blocked</h2>
+        <div id="chart-wrap"><canvas id="chart"></canvas></div>
+      </div>
+      <div class="panel" style="margin-top: 16px;">
+        <h2>Live event log</h2>
+        <div id="log"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    // ---- State ----
+    const $ = (id) => document.getElementById(id);
+    const stats = { allowed: 0, blocked: 0 };
+    let loopTimer = null;
+
+    // ---- Chart setup: 60 one-second buckets, stacked allowed+blocked ----
+    const ctx = $('chart').getContext('2d');
+    const labels = Array.from({ length: 60 }, (_, i) => `${59 - i}s`);
+    const allowedData = new Array(60).fill(0);
+    const blockedData = new Array(60).fill(0);
+    const chart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Allowed', data: allowedData, backgroundColor: '#2ea043' },
+          { label: 'Blocked', data: blockedData, backgroundColor: '#f85149' },
+        ],
+      },
+      options: {
+        animation: false,
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { stacked: true, grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
+          y: { stacked: true, grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
+        },
+        plugins: { legend: { labels: { color: '#c9d1d9' } } },
+      },
+    });
+
+    // Tick the chart: roll left every second.
+    setInterval(() => {
+      allowedData.unshift(0);
+      blockedData.unshift(0);
+      allowedData.length = 60;
+      blockedData.length = 60;
+      chart.update('none');
+      $('rps-now').textContent = String(allowedData[0] + blockedData[0]);
+    }, 1000);
+
+    // ---- Event log ----
+    const logEl = $('log');
+    function appendLog(evt) {
+      const div = document.createElement('div');
+      div.className = evt.allowed ? 'allowed' : 'blocked';
+      const t = new Date(evt.at).toISOString().substr(11, 12);
+      div.innerHTML =
+        `<span style="color:#8b949e">${t}</span> ` +
+        `<span class="pill ${evt.allowed ? 'green' : 'red'}">${evt.allowed ? 'OK' : '429'}</span> ` +
+        `${evt.algorithm} ${evt.route} ` +
+        `(remaining=${evt.remaining})`;
+      logEl.prepend(div);
+      while (logEl.childNodes.length > 200) logEl.removeChild(logEl.lastChild);
+    }
+
+    // ---- WebSocket ----
+    let ws;
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onopen = () => { $('ws-state').textContent = 'connected'; $('ws-state').className = 'ws-state ok'; };
+      ws.onclose = () => {
+        $('ws-state').textContent = 'reconnecting…'; $('ws-state').className = 'ws-state bad';
+        setTimeout(connect, 1500);
+      };
+      ws.onerror = () => ws.close();
+      ws.onmessage = (m) => {
+        try {
+          const evt = JSON.parse(m.data);
+          if (evt.type === 'allowed' || evt.type === 'blocked') onEvent(evt);
+        } catch {}
+      };
+    }
+    connect();
+
+    function onEvent(evt) {
+      stats[evt.type === 'allowed' ? 'allowed' : 'blocked']++;
+      $('allowed-count').textContent = String(stats.allowed);
+      $('blocked-count').textContent = String(stats.blocked);
+      $('last-quota').textContent = String(evt.remaining);
+      allowedData[0] += evt.type === 'allowed' ? 1 : 0;
+      blockedData[0] += evt.type === 'blocked' ? 1 : 0;
+      chart.update('none');
+      appendLog({ ...evt, allowed: evt.type === 'allowed' });
+    }
+
+    // ---- Firing requests ----
+    async function fireOne() {
+      const endpoint = $('endpoint').value;
+      const [method, path] = endpoint.split(' ');
+      const url = path;
+      const init = { method };
+      if (method === 'POST') {
+        init.headers = { 'content-type': 'application/json' };
+        init.body = JSON.stringify({ user: 'demo', pass: 'demo' });
+      }
+      const start = performance.now();
+      try {
+        const res = await fetch(url, init);
+        const ms = Math.round(performance.now() - start);
+        // Server emits the event over WS — we don't double-count client-side.
+        // We just log locally for instant feedback.
+        appendLog({
+          allowed: res.status !== 429,
+          algorithm: $('algo').value,
+          route: endpoint,
+          remaining: res.headers.get('X-RateLimit-Remaining') || 0,
+          at: Date.now(),
+        });
+      } catch (e) {
+        appendLog({ allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
+      }
+    }
+
+    $('fire').onclick = fireOne;
+
+    $('loop').onclick = () => {
+      const rps = Math.max(1, parseInt($('rps').value, 10) || 5);
+      $('loop').disabled = true; $('stop').disabled = false;
+      const total = parseInt($('n').value, 10) || 20;
+      const interval = 1000 / rps;
+      let fired = 0;
+      loopTimer = setInterval(() => {
+        if (fired >= total) { stopLoop(); return; }
+        fireOne();
+        fired++;
+      }, interval);
+    };
+
+    function stopLoop() {
+      if (loopTimer) clearInterval(loopTimer);
+      loopTimer = null;
+      $('loop').disabled = false; $('stop').disabled = true;
+    }
+    $('stop').onclick = stopLoop;
+    $('clear').onclick = () => { logEl.innerHTML = ''; };
+  </script>
+</body>
+</html>
