@@ -2,9 +2,8 @@
 
 A small Node + Redis project for comparing a few rate-limiting strategies side by side. I wanted something I could run locally, throw traffic at, and watch how each algorithm behaves.
 
-> **Live demo:** [add your URL here after deploying]
-> **Dashboard:** [add your URL here]/  (the `/` route is the live dashboard)
-
+> **Live demo:** https://rate-limiter-j4km.onrender.com
+> 
 ---
 
 ## Why I built it
