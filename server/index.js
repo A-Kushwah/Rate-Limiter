@@ -65,21 +65,36 @@ async function main() {
   // --- Dashboard (static) ---
   if (config.dashboardEnabled) {
     app.get('/', (req, res) => {
-      res.sendFile(path.join(__dirname, '..', 'src/dashboard/index.html'));
+      res.sendFile(path.resolve(__dirname, '..', 'src/dashboard/index.html'));
     });
   }
 
   // --- Demo API (rate-limited) ---
-  // Apply a global limiter at /api so unconfigured routes are still bounded
-  // by the default config. Per-route overrides inside the router take
-  // precedence.
-  app.use('/api', rateLimiter({ scope: 'GLOBAL /api' }));
+  // A single limiter mounted at /api handles every route. Leaving `scope`
+  // unset makes it fall back to `${req.method} ${req.path}` per request, so
+  // each endpoint gets its own bucket and its own ROUTES_JSON override is
+  // resolved correctly (see resolveRouteConfig). Routes that aren't listed
+  // in ROUTES_JSON still get bounded by the global defaults.
+  //
+  // NOTE: individual routes in demoApi used to also wrap themselves with
+  // rateLimiter(...). That meant every request was counted twice (once
+  // here, once again inside the route) against two different scope keys,
+  // and the dashboard showed duplicate events per request. The per-route
+  // wrapping has been removed — this single middleware is now the only
+  // rate limiter in the request path.
+  app.use('/api', rateLimiter());
   app.use('/api', demoApi);
 
   // --- Error handler (last) ---
   app.use((err, req, res, _next) => {
-    console.error('[unhandled]', err);
-    res.status(500).json({ error: 'internal_error' });
+    // express.json() throws a SyntaxError (status 400) for malformed JSON
+    // and a PayloadTooLargeError (status 413) for oversized bodies. Honor
+    // whatever status body-parser set instead of masking it as a 500.
+    const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 600
+      ? err.status
+      : 500;
+    if (status >= 500) console.error('[unhandled]', err);
+    res.status(status).json({ error: status >= 500 ? 'internal_error' : 'bad_request' });
   });
 
   const server = http.createServer(app);

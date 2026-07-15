@@ -174,14 +174,28 @@
     // ---- Event log ----
     const logEl = $('log');
     function appendLog(evt) {
+      // SECURITY: evt.route/evt.algorithm ultimately derive from the
+      // request path a client sent (e.g. a request to
+      // "/api/<script>...") and are broadcast to every connected
+      // dashboard over the websocket. Never build this with innerHTML +
+      // template interpolation — that's a stored-XSS vector where one
+      // malicious request compromises every open dashboard tab. Build
+      // the DOM with real nodes and set text via textContent instead.
       const div = document.createElement('div');
       div.className = evt.allowed ? 'allowed' : 'blocked';
-      const t = new Date(evt.at).toISOString().substr(11, 12);
-      div.innerHTML =
-        `<span style="color:#8b949e">${t}</span> ` +
-        `<span class="pill ${evt.allowed ? 'green' : 'red'}">${evt.allowed ? 'OK' : '429'}</span> ` +
-        `${evt.algorithm} ${evt.route} ` +
-        `(remaining=${evt.remaining})`;
+
+      const timeSpan = document.createElement('span');
+      timeSpan.style.color = '#8b949e';
+      timeSpan.textContent = new Date(evt.at).toISOString().substr(11, 12);
+
+      const pill = document.createElement('span');
+      pill.className = `pill ${evt.allowed ? 'green' : 'red'}`;
+      pill.textContent = evt.allowed ? 'OK' : '429';
+
+      const detail = document.createElement('span');
+      detail.textContent = ` ${evt.algorithm} ${evt.route} (remaining=${evt.remaining})`;
+
+      div.append(timeSpan, ' ', pill, detail);
       logEl.prepend(div);
       while (logEl.childNodes.length > 200) logEl.removeChild(logEl.lastChild);
     }

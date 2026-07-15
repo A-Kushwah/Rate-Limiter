@@ -7,8 +7,9 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "test": "node --test tests/algorithms.test.js",
+    "test": "node --test tests/*.test.js",
     "test:unit": "node --test tests/algorithms.test.js",
+    "test:routes": "node --test tests/routes.test.js",
     "load": "node scripts/loadtest.js"
   },
   "engines": {
