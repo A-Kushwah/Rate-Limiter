@@ -217,6 +217,27 @@
       appendLog({ ...evt, allowed: evt.type === 'allowed' });
     }
 
+    // ---- Algorithm switcher: writes to /config so the next request enforces it ----
+    async function setAlgorithm(algo) {
+      try {
+        const res = await fetch('/config', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ algorithm: algo }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (e) {
+        appendLog({ allowed: false, algorithm: algo, route: 'config', remaining: 0, at: Date.now() });
+      }
+    }
+    $('algo').onchange = (e) => setAlgorithm(e.target.value);
+
+    // Reflect the server's current algorithm on first paint so the dropdown
+    // doesn't lie about what's enforcing.
+    fetch('/config').then(r => r.json()).then(c => {
+      if (c.algorithm && $('algo').value !== c.algorithm) $('algo').value = c.algorithm;
+    }).catch(() => {});
+
     // ---- Firing requests ----
     async function fireOne() {
       const endpoint = $('endpoint').value;
@@ -266,7 +287,14 @@
       $('loop').disabled = false; $('stop').disabled = true;
     }
     $('stop').onclick = stopLoop;
-    $('clear').onclick = () => { logEl.innerHTML = ''; };
+    $('clear').onclick = () => {
+      logEl.innerHTML = '';
+      stats.allowed = 0; stats.blocked = 0;
+      $('allowed-count').textContent = '0';
+      $('blocked-count').textContent = '0';
+      for (let i = 0; i < 60; i++) { allowedData[i] = 0; blockedData[i] = 0; }
+      chart.update('none');
+    };
   </script>
 </body>
 </html>

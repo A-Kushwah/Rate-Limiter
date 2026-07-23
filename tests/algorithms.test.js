@@ -35,7 +35,7 @@ test.after(async () => {
 async function runN(algo, id, n, opts) {
   const results = [];
   for (let i = 0; i < n; i++) {
-    results.push(await check(algo, id, 'unit', opts));
+    results.push(await check(algo, 'unit', id, opts));
   }
   return results;
 }
@@ -59,10 +59,10 @@ test('sliding-log: oldest entry rolls out of window', async () => {
   const opts = { limit: 3, windowMs: 200 }; // 200ms window so we can wait it out
   let r = await runN('sliding-log', id, 3, opts);
   assert.equal(r.every(x => x.allowed), true);
-  r = await check('sliding-log', id, 'unit', opts);
+  r = await check('sliding-log', 'unit', id, opts);
   assert.equal(r.allowed, false, '4th should be blocked');
   await new Promise(res => setTimeout(res, 250));
-  r = await check('sliding-log', id, 'unit', opts);
+  r = await check('sliding-log', 'unit', id, opts);
   assert.equal(r.allowed, true, 'after window passes, should be allowed again');
 });
 
@@ -71,7 +71,7 @@ test('sliding-log: remains blocked inside window even after time passes (still u
   const opts = { limit: 2, windowMs: 500 };
   await runN('sliding-log', id, 2, opts);
   await new Promise(res => setTimeout(res, 100));
-  const r = await check('sliding-log', id, 'unit', opts);
+  const r = await check('sliding-log', 'unit', id, opts);
   assert.equal(r.allowed, false, 'still inside window with full log');
 });
 
@@ -83,14 +83,14 @@ test('sliding-window: weighted count from previous window', async () => {
   // Fill 5 in current window
   await runN('sliding-window', id, 5, opts);
   // Immediately — should be blocked (5/5 used)
-  let r = await check('sliding-window', id, 'unit', opts);
+  let r = await check('sliding-window', 'unit', id, opts);
   assert.equal(r.allowed, false);
 
   // Wait > 1 window so previous bucket is fully out of scope
   await new Promise(res => setTimeout(res, windowMs + 50));
   // Wait *one more* windowMs so previous (still full) bucket is gone
   await new Promise(res => setTimeout(res, windowMs + 50));
-  r = await check('sliding-window', id, 'unit', opts);
+  r = await check('sliding-window', 'unit', id, opts);
   assert.equal(r.allowed, true, 'after two full windows, fresh allowance');
 });
 
@@ -110,7 +110,7 @@ test('sliding-window: weighted count from previous window blocks when prev was a
   // algorithm. Let's just assert the algorithm returned a sensible value
   // and didn't explode — the more important property is the "no double
   // burst at boundary" test below.
-  const r = await check('sliding-window', id, 'unit', opts);
+  const r = await check('sliding-window', 'unit', id, opts);
   assert.ok(['allowed', 'blocked'].includes(r.allowed ? 'allowed' : 'blocked'));
 
   // A more reliable property: with prev=limit and cur=0, the moment we
@@ -123,7 +123,7 @@ test('sliding-window: weighted count from previous window blocks when prev was a
   await new Promise(res => setTimeout(res, 1001));
   let allowedAcrossBoundary = 0;
   for (let i = 0; i < 10; i++) {
-    const x = await check('sliding-window', id2, 'unit', { limit: 3, windowMs: 1000 });
+    const x = await check('sliding-window', 'unit', id2, { limit: 3, windowMs: 1000 });
     if (x.allowed) allowedAcrossBoundary++;
   }
   // At most 3 should slip through (the new window's quota), even though we
@@ -139,11 +139,11 @@ test('token-bucket: allows burst up to capacity, then steady refill', async () =
   const r = await runN('token-bucket', id, 5, opts);
   assert.equal(r.every(x => x.allowed), true, 'first 5 should fit capacity');
   // 6th should be blocked
-  const r6 = await check('token-bucket', id, 'unit', opts);
+  const r6 = await check('token-bucket', 'unit', id, opts);
   assert.equal(r6.allowed, false);
   // After 250ms one more token should be available (5/s = 1 every 200ms)
   await new Promise(res => setTimeout(res, 260));
-  const r7 = await check('token-bucket', id, 'unit', opts);
+  const r7 = await check('token-bucket', 'unit', id, opts);
   assert.equal(r7.allowed, true, 'after refill interval, allowed again');
 });
 
@@ -163,11 +163,11 @@ test('leaky-bucket: rejects when bucket full, allows after leak', async () => {
   const r = await runN('leaky-bucket', id, 5, opts);
   assert.equal(r.every(x => x.allowed), true);
   // Next one should be blocked
-  const r6 = await check('leaky-bucket', id, 'unit', opts);
+  const r6 = await check('leaky-bucket', 'unit', id, opts);
   assert.equal(r6.allowed, false);
   // After 250ms, ~1.25 requests have leaked — at least one slot
   await new Promise(res => setTimeout(res, 260));
-  const r7 = await check('leaky-bucket', id, 'unit', opts);
+  const r7 = await check('leaky-bucket', 'unit', id, opts);
   assert.equal(r7.allowed, true);
 });
 
@@ -191,7 +191,7 @@ test('token-bucket: 100 concurrent requests allow exactly capacity', async () =>
   const opts = { limit: 10, windowMs: 60_000, burst: 0 };
   const promises = [];
   for (let i = 0; i < 100; i++) {
-    promises.push(check('token-bucket', id, 'unit', opts));
+    promises.push(check('token-bucket', 'unit', id, opts));
   }
   const results = await Promise.all(promises);
   const allowed = results.filter(x => x.allowed).length;
@@ -203,7 +203,7 @@ test('fixed-window: 100 concurrent requests allow exactly limit', async () => {
   const opts = { limit: 7, windowMs: 60_000 };
   const promises = [];
   for (let i = 0; i < 100; i++) {
-    promises.push(check('fixed-window', id, 'unit', opts));
+    promises.push(check('fixed-window', 'unit', id, opts));
   }
   const results = await Promise.all(promises);
   const allowed = results.filter(x => x.allowed).length;

@@ -9,9 +9,11 @@ const { emit } = require('../events');
 function resolveId(strategy, req) {
   const apiKey = req.get('x-api-key') || null;
   const userId = (req.user && req.user.id) || req.get('x-user-id') || null;
-  // Express's `req.ip` requires `app.set('trust proxy', ...)` to be honest
-  // about the originating IP behind a load balancer. We do that in server.js.
-  const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
+  // req.socket.remoteAddress is the modern API; req.connection is a
+  // deprecated alias that's been removed in newer Node versions.
+  const ip = req.ip
+    || (req.socket && req.socket.remoteAddress)
+    || 'unknown';
 
   switch (strategy) {
     case 'apiKey':   return apiKey || `ip:${ip}`;
@@ -22,25 +24,48 @@ function resolveId(strategy, req) {
   }
 }
 
-// Match the longest configured route prefix. More specific overrides win.
-// Returns the merged config (route-specific overrides applied on top of
-// global defaults).
-function resolveRouteConfig(reqPath) {
+// Match the longest configured route prefix. Keys in ROUTES_JSON may be
+// either a plain path prefix ("/api/search") which matches any method, or
+// a method-qualified prefix ("POST /api/login") which is matched first.
+// The longest matching prefix wins, so a more specific override beats a
+// general one.
+function resolveRouteConfig(method, reqPath) {
   const routes = config.routes;
   let best = null;
   let bestLen = -1;
   for (const [prefix, cfg] of Object.entries(routes)) {
-    if (reqPath.startsWith(prefix) && prefix.length > bestLen) {
+    const fullMatch = `${method} ${reqPath}`.startsWith(prefix);
+    const pathMatch = !prefix.includes(' ') && reqPath.startsWith(prefix);
+    if ((fullMatch || pathMatch) && prefix.length > bestLen) {
       best = cfg;
       bestLen = prefix.length;
     }
   }
   return {
     algorithm: (best && best.algorithm) || config.algorithm,
-    limit:     (best && best.limit)     || config.limit,
-    windowMs:  (best && best.windowMs)  || config.windowMs,
-    burst:     (best && best.burst)     || config.burst,
+    // Use != null (not truthy) so explicit 0 values from the override win
+    // over the global default. The `||` would treat 0 as missing.
+    limit:     (best && best.limit     != null) ? best.limit     : config.limit,
+    windowMs:  (best && best.windowMs  != null) ? best.windowMs  : config.windowMs,
+    burst:     (best && best.burst     != null) ? best.burst     : config.burst,
   };
+}
+
+// Return the longest matching route-prefix string (raw key) for a given
+// request, or null when nothing matches. Used to derive a stable event
+// scope from the configured overrides.
+function matchedRoutePrefix(method, reqPath) {
+  let best = null;
+  let bestLen = -1;
+  for (const prefix of Object.keys(config.routes)) {
+    const fullMatch = `${method} ${reqPath}`.startsWith(prefix);
+    const pathMatch = !prefix.includes(' ') && reqPath.startsWith(prefix);
+    if ((fullMatch || pathMatch) && prefix.length > bestLen) {
+      best = prefix;
+      bestLen = prefix.length;
+    }
+  }
+  return best;
 }
 
 function setRateLimitHeaders(res, result, opts) {
@@ -53,16 +78,26 @@ function setRateLimitHeaders(res, result, opts) {
   }
 }
 
-// Build the middleware factory. The demo app mounts the limiter with a
-// fixed scope like "GET /login" so it does not need to reconstruct it from
-// the request every time.
+// Build the middleware factory. `opts.scope` lets the caller force a
+// specific scope label (used by the per-route mount in demo/api.js so the
+// dashboard groups events by endpoint). When no explicit scope is given,
+// the middleware derives one from the matched route prefix or, failing
+// that, from method + path.
 function rateLimiter(opts = {}) {
-  const scope = opts.scope || '__default__';
+  const scope = opts.scope || null;
 
   return async function limiter(req, res, next) {
-    const routeCfg = resolveRouteConfig(req.path);
+    const routeCfg = resolveRouteConfig(req.method, req.path);
     const id = resolveId(config.keyStrategy, req);
-    const routeScope = opts.scope || `${req.method} ${req.path}`;
+
+    // Pick a useful scope: explicit override wins, else the matched route
+    // prefix from the config (so per-route overrides also produce
+    // per-endpoint event groups), else fall back to method+path.
+    let routeScope = scope;
+    if (!routeScope) {
+      const matchedPrefix = matchedRoutePrefix(req.method, req.path);
+      routeScope = matchedPrefix || `${req.method} ${req.path}`;
+    }
 
     const startedAt = Date.now();
     let result;
@@ -110,4 +145,4 @@ function rateLimiter(opts = {}) {
   };
 }
 
-module.exports = { rateLimiter, resolveId, resolveRouteConfig };
+module.exports = { rateLimiter, resolveId, resolveRouteConfig, matchedRoutePrefix };
