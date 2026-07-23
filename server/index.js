@@ -116,16 +116,26 @@ async function main() {
   }
 
   // --- Demo API (rate-limited) ---
-  // The global limiter resolves the most specific ROUTES_JSON override
-  // for every /api request, so per-route limiters in the router are not
-  // needed and would double-count.
+  // A single limiter mounted at /api handles every route. Leaving `scope`
+  // unset makes it fall back to `${req.method} ${req.path}` per request, so
+  // each endpoint gets its own bucket and its own ROUTES_JSON override is
+  // resolved correctly (see resolveRouteConfig). Routes that aren't listed
+  // in ROUTES_JSON still get bounded by the global defaults.
+  //
+  // NOTE: individual routes in demoApi used to also wrap themselves with
+  // rateLimiter(...). That meant every request was counted twice (once
+  // here, once again inside the route) against two different scope keys,
+  // and the dashboard showed duplicate events per request. The per-route
+  // wrapping has been removed — this single middleware is now the only
+  // rate limiter in the request path.
   app.use('/api', rateLimiter());
   app.use('/api', demoApi);
 
   // --- Error handler (last) ---
   app.use((err, req, res, _next) => {
-    // body-parser sets a status (400 for malformed JSON, 413 for too big).
-    // Honor it; fall back to 500 only for unknown errors.
+    // express.json() throws a SyntaxError (status 400) for malformed JSON
+    // and a PayloadTooLargeError (status 413) for oversized bodies. Honor
+    // whatever status body-parser set instead of masking it as a 500.
     const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 600
       ? err.status
       : 500;

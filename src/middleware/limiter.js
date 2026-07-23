@@ -24,48 +24,48 @@ function resolveId(strategy, req) {
   }
 }
 
-// Match the longest configured route prefix. Keys in ROUTES_JSON may be
-// either a plain path prefix ("/api/search") which matches any method, or
-// a method-qualified prefix ("POST /api/login") which is matched first.
-// The longest matching prefix wins, so a more specific override beats a
-// general one.
-function resolveRouteConfig(method, reqPath) {
-  const routes = config.routes;
-  let best = null;
-  let bestLen = -1;
-  for (const [prefix, cfg] of Object.entries(routes)) {
-    const fullMatch = `${method} ${reqPath}`.startsWith(prefix);
-    const pathMatch = !prefix.includes(' ') && reqPath.startsWith(prefix);
-    if ((fullMatch || pathMatch) && prefix.length > bestLen) {
-      best = cfg;
-      bestLen = prefix.length;
-    }
-  }
-  return {
-    algorithm: (best && best.algorithm) || config.algorithm,
-    // Use != null (not truthy) so explicit 0 values from the override win
-    // over the global default. The `||` would treat 0 as missing.
-    limit:     (best && best.limit     != null) ? best.limit     : config.limit,
-    windowMs:  (best && best.windowMs  != null) ? best.windowMs  : config.windowMs,
-    burst:     (best && best.burst     != null) ? best.burst     : config.burst,
-  };
-}
-
-// Return the longest matching route-prefix string (raw key) for a given
-// request, or null when nothing matches. Used to derive a stable event
-// scope from the configured overrides.
+// Find the most specific configured route entry for a request. ROUTES_JSON
+// keys can be either "METHOD /path" (e.g. "POST /api/login") or a bare path
+// prefix (e.g. "/api/admin", which applies to any method). We try an exact
+// "METHOD /path" match first, then fall back to the longest matching prefix
+// among both forms. (Exported for unit testing without a live request.)
 function matchedRoutePrefix(method, reqPath) {
+  const routes = config.routes;
+  const methodPath = `${method} ${reqPath}`;
+
+  // 1. Exact "METHOD /path" match wins outright.
+  if (routes[methodPath]) return methodPath;
+
+  // 2. Longest-prefix match, considering "METHOD /prefix" keys (matched
+  //    against `${method} ${reqPath}`) and bare "/prefix" keys (matched
+  //    against `reqPath` only, so they apply across all methods).
   let best = null;
   let bestLen = -1;
-  for (const prefix of Object.keys(config.routes)) {
-    const fullMatch = `${method} ${reqPath}`.startsWith(prefix);
-    const pathMatch = !prefix.includes(' ') && reqPath.startsWith(prefix);
-    if ((fullMatch || pathMatch) && prefix.length > bestLen) {
+  for (const prefix of Object.keys(routes)) {
+    const hasMethod = prefix.includes(' ');
+    const candidate = hasMethod ? methodPath : reqPath;
+    if (candidate.startsWith(prefix) && prefix.length > bestLen) {
       best = prefix;
       bestLen = prefix.length;
     }
   }
   return best;
+}
+
+// Merge the matched route override (if any) on top of the global defaults.
+function resolveRouteConfig(method, reqPath) {
+  const routes = config.routes;
+  const prefix = matchedRoutePrefix(method, reqPath);
+  const best = prefix ? routes[prefix] : null;
+  return {
+    algorithm: (best && best.algorithm) || config.algorithm,
+    // Use != null (not `||`) so an explicit override of 0 (e.g. burst: 0
+    // for login) isn't discarded in favor of the global default — `||`
+    // treats 0 as falsy and would silently ignore it.
+    limit:     (best && best.limit    != null) ? best.limit    : config.limit,
+    windowMs:  (best && best.windowMs != null) ? best.windowMs : config.windowMs,
+    burst:     (best && best.burst    != null) ? best.burst    : config.burst,
+  };
 }
 
 function setRateLimitHeaders(res, result, opts) {
@@ -78,25 +78,34 @@ function setRateLimitHeaders(res, result, opts) {
   }
 }
 
-// Build the middleware factory. `opts.scope` lets the caller force a
-// specific scope label (used by the per-route mount in demo/api.js so the
-// dashboard groups events by endpoint). When no explicit scope is given,
+// Cap how much of the raw request path we'll use to build a scope/Redis-key.
+// Without this, an attacker can hit /api/<random-unique-string> repeatedly
+// and force the app to create an unbounded number of distinct rate-limit
+// buckets in Redis — a cheap key-space/memory exhaustion DoS, since scope
+// is derived straight from client-controlled input (the URL path).
+const MAX_SCOPE_PATH_LEN = 200;
+
+function safeScopePath(fullPath) {
+  return fullPath.length > MAX_SCOPE_PATH_LEN
+    ? fullPath.slice(0, MAX_SCOPE_PATH_LEN)
+    : fullPath;
+}
+
+// Build the middleware factory. When no explicit scope is given,
 // the middleware derives one from the matched route prefix or, failing
 // that, from method + path.
 function rateLimiter(opts = {}) {
-  const scope = opts.scope || null;
+  const explicitScope = opts.scope || null;
 
   return async function limiter(req, res, next) {
-    const routeCfg = resolveRouteConfig(req.method, req.path);
+    const fullPath = req.originalUrl ? req.originalUrl.split('?')[0] : req.path;
+    const routeCfg = resolveRouteConfig(req.method, fullPath);
     const id = resolveId(config.keyStrategy, req);
 
-    // Pick a useful scope: explicit override wins, else the matched route
-    // prefix from the config (so per-route overrides also produce
-    // per-endpoint event groups), else fall back to method+path.
-    let routeScope = scope;
+    let routeScope = explicitScope;
     if (!routeScope) {
-      const matchedPrefix = matchedRoutePrefix(req.method, req.path);
-      routeScope = matchedPrefix || `${req.method} ${req.path}`;
+      const matchedPrefix = matchedRoutePrefix(req.method, fullPath);
+      routeScope = matchedPrefix || `${req.method} ${safeScopePath(fullPath)}`;
     }
 
     const startedAt = Date.now();

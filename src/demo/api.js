@@ -4,11 +4,14 @@ const express = require('express');
 
 const router = express.Router();
 
-// These are stand-ins for real handlers. Rate limiting is enforced by the
-// global /api middleware in server/index.js, which already resolves the
-// most specific override from ROUTES_JSON. The per-route paths here just
-// need to exist so the global prefix matcher produces a stable scope for
-// the dashboard event log.
+// These are just stand-ins for real handlers. The point here is the limiter,
+// not the business logic. The per-endpoint limits are configurable through
+// ROUTES_JSON so they can be adjusted without changing the code.
+//
+// Rate limiting itself is handled once, up front, by the global limiter
+// mounted at /api in server/index.js — it resolves the right ROUTES_JSON
+// override per method+path, so these handlers don't need their own
+// rateLimiter() wrapper.
 
 router.get('/search', (req, res) => {
   res.json({
