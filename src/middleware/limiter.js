@@ -122,6 +122,19 @@ function rateLimiter(opts = {}) {
       // you would fail closed here.
       console.error('[limiter] error, failing open:', err.message);
       res.set('X-RateLimit-Error', 'limiter-unavailable');
+      
+      // Emit a dashboard event so the UI graph and stats still work when failing open
+      emit({
+        type: 'allowed',
+        algorithm: routeCfg.algorithm,
+        route: routeScope,
+        id,
+        limit: routeCfg.limit,
+        remaining: 0,
+        at: startedAt,
+        latencyMs: Date.now() - startedAt,
+      });
+
       return next();
     }
 
