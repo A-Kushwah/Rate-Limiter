@@ -5,128 +5,344 @@
   <title>Rate Limiter — Live Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+    
     :root {
-      --bg: #0e1117;
-      --panel: #161b22;
-      --border: #30363d;
-      --text: #c9d1d9;
-      --muted: #8b949e;
-      --green: #2ea043;
-      --red: #f85149;
-      --blue: #58a6ff;
+      --bg: #FDFBF7;
+      --panel: #FFFFFF;
+      --border: #1a1a1a;
+      --text: #1a1a1a;
+      --muted: #555555;
+      --green: #15803d;
+      --red: #b91c1c;
+      --blue: #2563eb;
+      --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+      --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, monospace;
     }
+    
     * { box-sizing: border-box; }
+    
     body {
-      margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-      background: var(--bg); color: var(--text);
+      margin: 0; 
+      font-family: var(--font-serif);
+      background: var(--bg); 
+      color: var(--text);
+      /* Subtle noise texture */
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
     }
+    
+    /* Layout */
+    .app-wrapper {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 3rem 2rem;
+      min-height: 100dvh;
+    }
+
+    /* Header */
     header {
-      padding: 16px 24px; border-bottom: 1px solid var(--border);
-      display: flex; justify-content: space-between; align-items: center;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding-bottom: 2rem;
+      margin-bottom: 3rem;
+      border-bottom: 2px solid var(--border);
     }
-    header h1 { font-size: 18px; margin: 0; font-weight: 600; }
-    header .meta { color: var(--muted); font-size: 13px; }
-    .container { display: grid; grid-template-columns: 320px 1fr; gap: 16px; padding: 16px; }
-    @media (max-width: 800px) { .container { grid-template-columns: 1fr; } }
-    .panel {
-      background: var(--panel); border: 1px solid var(--border);
-      border-radius: 8px; padding: 16px;
+    
+    header h1 { 
+      font-size: 3rem; 
+      margin: 0; 
+      font-weight: 400; 
+      letter-spacing: -0.02em;
+      line-height: 1;
     }
-    .panel h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-    label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px; }
-    select, input, button {
-      width: 100%; padding: 8px 10px; background: #0d1117;
-      color: var(--text); border: 1px solid var(--border); border-radius: 6px;
-      font-size: 14px;
+    
+    header .meta { 
+      font-family: var(--font-mono);
+      color: var(--muted); 
+      font-size: 0.85rem; 
+      margin-top: 0.5rem;
     }
-    button { cursor: pointer; background: var(--blue); color: #fff; border: none; font-weight: 600; }
-    button:hover { opacity: 0.9; }
-    button.secondary { background: #21262d; color: var(--text); border: 1px solid var(--border); }
-    button.danger { background: var(--red); }
-    .row { display: flex; gap: 8px; }
+    
+    /* Double-Bezel Panel Architecture */
+    .panel-shell {
+      background: rgba(0,0,0,0.02);
+      border: 1px solid rgba(0,0,0,0.1);
+      padding: 0.5rem;
+      border-radius: 1.5rem;
+    }
+    
+    .panel-core {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 1.1rem;
+      padding: 2rem;
+      height: 100%;
+      box-shadow: inset 0 1px 1px rgba(255,255,255,1), 0 4px 12px -4px rgba(0,0,0,0.05);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .container { 
+      display: grid; 
+      grid-template-columns: 380px 1fr; 
+      gap: 1.5rem; 
+      grid-auto-flow: dense;
+    }
+    
+    @media (max-width: 900px) { 
+      .container { grid-template-columns: 1fr; } 
+    }
+    
+    h2.eyebrow { 
+      font-family: var(--font-mono);
+      font-size: 0.75rem; 
+      margin: 0 0 1.5rem; 
+      color: var(--muted); 
+      font-weight: 700; 
+      text-transform: uppercase; 
+      letter-spacing: 0.1em; 
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.5rem;
+    }
+    
+    label { 
+      display: block; 
+      font-family: var(--font-mono);
+      font-size: 0.75rem; 
+      color: var(--border); 
+      margin: 1.2rem 0 0.4rem; 
+      font-weight: 700;
+    }
+    
+    select, input {
+      width: 100%; 
+      padding: 0.75rem 1rem; 
+      background: var(--bg);
+      color: var(--text); 
+      border: 1px solid var(--border); 
+      border-radius: 0.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      transition: all 0.4s cubic-bezier(0.32,0.72,0,1);
+    }
+    
+    select:focus, input:focus {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--border);
+    }
+
+    .button-group {
+      display: flex; gap: 0.75rem; margin-top: 1.5rem;
+    }
+    
+    button { 
+      cursor: pointer; 
+      background: var(--border); 
+      color: #fff; 
+      border: 1px solid var(--border); 
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      font-weight: 700; 
+      padding: 0.75rem 1.25rem;
+      border-radius: 2rem; /* Pill shape */
+      transition: all 0.4s cubic-bezier(0.32,0.72,0,1);
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    button:hover { 
+      background: var(--text);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    button:active {
+      transform: scale(0.98);
+    }
+    
+    button.secondary { 
+      background: transparent; 
+      color: var(--border); 
+    }
+    
+    button.secondary:hover {
+      background: rgba(0,0,0,0.03);
+    }
+    
+    .row { display: flex; gap: 0.75rem; }
     .row > * { flex: 1; }
-    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
-    .stat { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
-    .stat .v { font-size: 20px; font-weight: 600; }
-    .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+    
+    /* Stats Bento */
+    .stats { 
+      display: grid; 
+      grid-template-columns: repeat(2, 1fr); 
+      gap: 0.75rem; 
+      margin-top: 2rem; 
+    }
+    
+    .stat { 
+      background: var(--bg); 
+      border: 1px solid var(--border); 
+      border-radius: 0.75rem; 
+      padding: 1rem; 
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .stat .v { 
+      font-family: var(--font-mono);
+      font-size: 1.75rem; 
+      font-weight: 700; 
+      margin-top: 0.25rem;
+    }
+    
+    .stat .l { 
+      font-family: var(--font-serif);
+      font-size: 0.85rem; 
+      color: var(--muted); 
+      text-transform: capitalize; 
+    }
+    
     .stat.green .v { color: var(--green); }
     .stat.red .v { color: var(--red); }
-    #chart-wrap { height: 360px; }
-    #log { height: 200px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
-    #log .allowed { color: var(--green); }
-    #log .blocked { color: var(--red); }
-    .pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-    .pill.green { background: rgba(46,160,67,0.15); color: var(--green); }
-    .pill.red { background: rgba(248,81,73,0.15); color: var(--red); }
-    .ws-state { font-size: 12px; }
+    
+    #chart-wrap { height: 340px; margin-top: 1rem; }
+    
+    #log { 
+      height: 250px; 
+      overflow-y: auto; 
+      font-family: var(--font-mono); 
+      font-size: 0.75rem; 
+      line-height: 1.6;
+      border: 1px solid rgba(0,0,0,0.1);
+      border-radius: 0.5rem;
+      padding: 1rem;
+      background: #faf9f6;
+    }
+    
+    #log .allowed { color: var(--green); border-bottom: 1px solid rgba(0,0,0,0.05); padding: 0.25rem 0;}
+    #log .blocked { color: var(--red); border-bottom: 1px solid rgba(0,0,0,0.05); padding: 0.25rem 0;}
+    
+    .pill { 
+      display: inline-block; 
+      padding: 2px 8px; 
+      border-radius: 12px; 
+      font-size: 0.7rem; 
+      font-weight: 700; 
+      margin-right: 0.5rem;
+      border: 1px solid currentColor;
+    }
+    
+    .pill.green { background: rgba(21,128,61,0.05); color: var(--green); }
+    .pill.red { background: rgba(185,28,28,0.05); color: var(--red); }
+    
+    .ws-state { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 700; }
     .ws-state.ok { color: var(--green); }
     .ws-state.bad { color: var(--red); }
+    
+    /* Custom Scrollbar for Log */
+    #log::-webkit-scrollbar { width: 6px; }
+    #log::-webkit-scrollbar-track { background: transparent; }
+    #log::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+    
+    /* Entry Animations */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(20px); filter: blur(4px); }
+      to { opacity: 1; transform: translateY(0); filter: blur(0); }
+    }
+    
+    header { animation: fadeUp 0.8s cubic-bezier(0.32,0.72,0,1) both; }
+    .panel-shell:nth-child(1) { animation: fadeUp 0.8s cubic-bezier(0.32,0.72,0,1) 0.1s both; }
+    .panel-shell:nth-child(2) { animation: fadeUp 0.8s cubic-bezier(0.32,0.72,0,1) 0.2s both; }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Rate Limiter — Live Dashboard</h1>
-      <div class="meta">Algorithm comparison &middot; real-time request stream</div>
+  <div class="app-wrapper">
+    <header>
+      <div>
+        <h1>Rate Limiter.</h1>
+        <div class="meta">CS_499: Algorithm Comparison & Real-Time Stream</div>
+      </div>
+      <div class="meta" style="text-align: right;">
+        STATUS<br/>
+        <span id="ws-state" class="ws-state bad">DISCONNECTED</span>
+      </div>
+    </header>
+
+    <div class="container">
+      
+      <!-- Controls Panel -->
+      <div class="panel-shell" style="grid-row: span 2;">
+        <div class="panel-core">
+          <h2 class="eyebrow">Parameters</h2>
+          
+          <label>ALGORITHM (ACTIVE)</label>
+          <select id="algo">
+            <option value="token-bucket">token-bucket</option>
+            <option value="leaky-bucket">leaky-bucket</option>
+            <option value="fixed-window">fixed-window</option>
+            <option value="sliding-window">sliding-window</option>
+            <option value="sliding-log">sliding-log</option>
+          </select>
+
+          <label>ENDPOINT</label>
+          <select id="endpoint">
+            <option value="GET /api/search">GET /api/search</option>
+            <option value="POST /api/login">POST /api/login</option>
+            <option value="GET /api/me">GET /api/me</option>
+            <option value="GET /api/expensive">GET /api/expensive</option>
+          </select>
+
+          <div class="row">
+            <div>
+              <label>REQUESTS / BURST</label>
+              <input id="n" type="number" value="20" min="1" max="500" />
+            </div>
+            <div>
+              <label>RPS (LOOP)</label>
+              <input id="rps" type="number" value="5" min="1" max="100" />
+            </div>
+          </div>
+
+          <div class="button-group">
+            <button id="fire">Fire once</button>
+            <button id="loop" class="secondary">Auto-fire</button>
+          </div>
+          <div class="button-group" style="margin-top: 0.75rem;">
+            <button id="stop" class="secondary" disabled>Stop Loop</button>
+            <button id="clear" class="secondary">Clear Log</button>
+          </div>
+
+          <div class="stats">
+            <div class="stat green"><div class="l">Allowed</div><div class="v" id="allowed-count">0</div></div>
+            <div class="stat red"><div class="l">Blocked</div><div class="v" id="blocked-count">0</div></div>
+            <div class="stat"><div class="l">Live RPS</div><div class="v" id="rps-now">0</div></div>
+            <div class="stat"><div class="l">Remaining</div><div class="v" id="last-quota">–</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chart Panel -->
+      <div class="panel-shell">
+        <div class="panel-core">
+          <h2 class="eyebrow">Telemetry (Last 60s)</h2>
+          <div id="chart-wrap"><canvas id="chart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Log Panel -->
+      <div class="panel-shell">
+        <div class="panel-core" style="padding: 1.5rem;">
+          <h2 class="eyebrow">Event Stream</h2>
+          <div id="log"></div>
+        </div>
+      </div>
+
     </div>
-    <div class="meta">
-      WS: <span id="ws-state" class="ws-state bad">disconnected</span>
-    </div>
-  </header>
-
-  <div class="container">
-    <aside class="panel">
-      <h2>Controls</h2>
-      <label>Algorithm (active)</label>
-      <select id="algo">
-        <option value="token-bucket">token-bucket</option>
-        <option value="leaky-bucket">leaky-bucket</option>
-        <option value="fixed-window">fixed-window</option>
-        <option value="sliding-window">sliding-window</option>
-        <option value="sliding-log">sliding-log</option>
-      </select>
-
-      <label>Endpoint</label>
-      <select id="endpoint">
-        <option value="GET /api/search">GET /api/search</option>
-        <option value="POST /api/login">POST /api/login</option>
-        <option value="GET /api/me">GET /api/me</option>
-        <option value="GET /api/expensive">GET /api/expensive</option>
-      </select>
-
-      <label>Requests / burst</label>
-      <div class="row">
-        <input id="n" type="number" value="20" min="1" max="500" />
-        <input id="rps" type="number" value="5" min="1" max="100" title="requests per second in the loop" />
-      </div>
-
-      <div class="row" style="margin-top: 12px;">
-        <button id="fire">Fire once</button>
-        <button id="loop" class="secondary">Auto-fire</button>
-        <button id="stop" class="secondary" disabled>Stop</button>
-      </div>
-      <div class="row" style="margin-top: 8px;">
-        <button id="clear" class="secondary">Clear log</button>
-      </div>
-
-      <div class="stats">
-        <div class="stat green"><div class="v" id="allowed-count">0</div><div class="l">Allowed</div></div>
-        <div class="stat red"><div class="v" id="blocked-count">0</div><div class="l">Blocked</div></div>
-        <div class="stat"><div class="v" id="rps-now">0</div><div class="l">RPS</div></div>
-        <div class="stat"><div class="v" id="last-quota">–</div><div class="l">Remaining</div></div>
-      </div>
-    </aside>
-
-    <section>
-      <div class="panel">
-        <h2>Rate over time (last 60s) — allowed vs blocked</h2>
-        <div id="chart-wrap"><canvas id="chart"></canvas></div>
-      </div>
-      <div class="panel" style="margin-top: 16px;">
-        <h2>Live event log</h2>
-        <div id="log"></div>
-      </div>
-    </section>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -146,18 +362,18 @@
       data: {
         labels,
         datasets: [
-          { label: 'Allowed', data: allowedData, backgroundColor: '#2ea043' },
-          { label: 'Blocked', data: blockedData, backgroundColor: '#f85149' },
+          { label: 'Allowed', data: allowedData, backgroundColor: '#15803d' },
+          { label: 'Blocked', data: blockedData, backgroundColor: '#b91c1c' },
         ],
       },
       options: {
         animation: false,
         responsive: true, maintainAspectRatio: false,
         scales: {
-          x: { stacked: true, grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
-          y: { stacked: true, grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
+          x: { stacked: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { color: '#555555', font: { family: 'Space Mono' } } },
+          y: { stacked: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { color: '#555555', font: { family: 'Space Mono' } } },
         },
-        plugins: { legend: { labels: { color: '#c9d1d9' } } },
+        plugins: { legend: { labels: { color: '#1a1a1a', font: { family: 'Space Mono' } } } },
       },
     });
 
@@ -174,18 +390,11 @@
     // ---- Event log ----
     const logEl = $('log');
     function appendLog(evt) {
-      // SECURITY: evt.route/evt.algorithm ultimately derive from the
-      // request path a client sent (e.g. a request to
-      // "/api/<script>...") and are broadcast to every connected
-      // dashboard over the websocket. Never build this with innerHTML +
-      // template interpolation — that's a stored-XSS vector where one
-      // malicious request compromises every open dashboard tab. Build
-      // the DOM with real nodes and set text via textContent instead.
       const div = document.createElement('div');
       div.className = evt.allowed ? 'allowed' : 'blocked';
 
       const timeSpan = document.createElement('span');
-      timeSpan.style.color = '#8b949e';
+      timeSpan.style.color = '#555555';
       timeSpan.textContent = new Date(evt.at).toISOString().substr(11, 12);
 
       const pill = document.createElement('span');
@@ -193,7 +402,7 @@
       pill.textContent = evt.allowed ? 'OK' : '429';
 
       const detail = document.createElement('span');
-      detail.textContent = ` ${evt.algorithm} ${evt.route} (remaining=${evt.remaining})`;
+      detail.textContent = ` ${evt.algorithm} ${evt.route} (rem=${evt.remaining})`;
 
       div.append(timeSpan, ' ', pill, detail);
       logEl.prepend(div);
@@ -205,9 +414,9 @@
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}/ws`);
-      ws.onopen = () => { $('ws-state').textContent = 'connected'; $('ws-state').className = 'ws-state ok'; };
+      ws.onopen = () => { $('ws-state').textContent = 'CONNECTED'; $('ws-state').className = 'ws-state ok'; };
       ws.onclose = () => {
-        $('ws-state').textContent = 'reconnecting…'; $('ws-state').className = 'ws-state bad';
+        $('ws-state').textContent = 'RECONNECTING…'; $('ws-state').className = 'ws-state bad';
         setTimeout(connect, 1500);
       };
       ws.onerror = () => ws.close();
@@ -246,8 +455,6 @@
     }
     $('algo').onchange = (e) => setAlgorithm(e.target.value);
 
-    // Reflect the server's current algorithm on first paint so the dropdown
-    // doesn't lie about what's enforcing.
     fetch('/config').then(r => r.json()).then(c => {
       if (c.algorithm && $('algo').value !== c.algorithm) $('algo').value = c.algorithm;
     }).catch(() => {});
@@ -266,8 +473,6 @@
       try {
         const res = await fetch(url, init);
         const ms = Math.round(performance.now() - start);
-        // Server emits the event over WS — we don't double-count client-side.
-        // We just log locally for instant feedback.
         appendLog({
           allowed: res.status !== 429,
           algorithm: $('algo').value,
