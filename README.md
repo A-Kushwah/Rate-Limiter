@@ -59,6 +59,10 @@ I kept running into the gap between reading about rate limiting and actually see
 5. The response includes `X-RateLimit-Limit / Remaining / Reset`. If blocked, the response is 429 with `Retry-After`.
 6. An event is published to the in-process pub/sub; the WebSocket server fans it out to the dashboard.
 
+The default token bucket allows up to `LIMIT + BURST` requests immediately (80 with the default 60 + 20), then refills at `LIMIT / WINDOW_MS`. A slow test loop can keep pace with that refill and never exhaust the bucket. The dashboard calculates a burst size and request rate from the selected route's effective settings so its default test crosses the threshold.
+
+Rate limiting fails closed if Redis is unavailable or a Lua check fails: API requests receive `503 rate_limiter_unavailable` instead of reaching the handler unmetered. `/health` also returns 503 until Redis is connected and the limiter scripts are loaded. Restore Redis to resume serving rate-limited API requests.
+
 Unmatched route paths use a shared per-method, per-mount-point bucket rather than a client-controlled path as a Redis key. This prevents arbitrary 404 paths from creating unbounded limiter keys; add a `ROUTES_JSON` prefix override when a route needs its own bucket.
 
 `WINDOW_MS` and `LIMIT` must be positive integers; `BURST` must be a non-negative integer. Invalid numeric settings or malformed route overrides fail startup rather than silently disabling the configured limiter.
@@ -333,7 +337,7 @@ This setup is enough for a small-to-medium API on one Redis. If I wanted to push
 
 - **The Redis/Lua part is the core.** The important bit is that the state change happens in one Redis-side operation. That is what avoids the classic race where a burst slips through because two requests read and write around the same time.
 
-- **Redis downtime is handled loosely.** If Redis is unavailable, the app still serves requests and adds an `X-RateLimit-Error` header so the behavior is visible instead of silently failing.
+- **Redis downtime fails closed.** If Redis is unavailable, API requests receive 503 with an `X-RateLimit-Error` header instead of bypassing enforcement. `/health` reports 503 until rate limiting is ready again.
 
 - **Per-route overrides live in `ROUTES_JSON`.** The login endpoint is intentionally stricter than search, and the middleware picks the most specific prefix match.
 

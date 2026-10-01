@@ -31,6 +31,10 @@ function ensureLoaded() {
   if (!scriptsLoaded) throw new Error('Lua scripts not loaded yet — call loadScripts() at boot');
 }
 
+function areScriptsLoaded() {
+  return scriptsLoaded;
+}
+
 // Build the Redis key for a given (algorithm, scope, id, window-start).
 // Scoping the prefix by algorithm keeps different algorithms from clobbering
 // each other if the same (route, client) is configured with different
@@ -140,4 +144,4 @@ async function check(algorithm, scope, id, opts) {
   };
 }
 
-module.exports = { check, loadScripts, makeKey, makeKeyNoSuffix, evalScript };
+module.exports = { check, loadScripts, areScriptsLoaded, makeKey, makeKeyNoSuffix, evalScript };

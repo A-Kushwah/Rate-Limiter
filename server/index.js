@@ -8,7 +8,7 @@ const { WebSocketServer } = require('ws');
 
 const config = require('../src/config');
 const { client: redis, connect: connectRedis, isReady: redisReady } = require('../src/redis');
-const { loadScripts } = require('../src/algorithms');
+const { loadScripts, areScriptsLoaded } = require('../src/algorithms');
 const { rateLimiter } = require('../src/middleware/limiter');
 const { configRateLimit } = require('../src/middleware/config-rate-limit');
 const { subscribe, snapshot } = require('../src/events');
@@ -55,9 +55,13 @@ async function main() {
 
   // --- Health & config (unprotected, no limiter) ---
   app.get('/health', (req, res) => {
-    res.json({
-      ok: true,
+    const redisIsReady = redisReady();
+    const scriptsAreLoaded = areScriptsLoaded();
+    const ready = redisIsReady && scriptsAreLoaded;
+    res.status(ready ? 200 : 503).json({
+      ok: ready,
       redis: redisReady() ? 'ready' : 'down',
+      limiter: ready ? 'ready' : 'not_ready',
       algorithm: config.algorithm,
       uptimeSec: Math.round(process.uptime()),
     });

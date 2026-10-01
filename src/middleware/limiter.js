@@ -90,7 +90,7 @@ function resolveRouteScope(method, fullPath, baseUrl, explicitScope) {
 // Build the middleware factory. When no explicit scope is given,
 // the middleware derives one from the matched route prefix or, failing
 // that, from a bounded method + mount-point scope.
-function rateLimiter(opts = {}) {
+function rateLimiter(opts = {}, checkLimit = check) {
   const explicitScope = opts.scope || null;
 
   return async function limiter(req, res, next) {
@@ -108,21 +108,16 @@ function rateLimiter(opts = {}) {
     const startedAt = Date.now();
     let result;
     try {
-      result = await check(routeCfg.algorithm, routeScope, id, {
+      result = await checkLimit(routeCfg.algorithm, routeScope, id, {
         limit: routeCfg.limit,
         windowMs: routeCfg.windowMs,
         burst: routeCfg.burst,
       });
     } catch (err) {
-      // Limiter itself is broken. Fail open: log it, allow the request,
-      // tag the response so it's visible in logs. In a stricter deployment
-      // you would fail closed here.
-      console.error('[limiter] error, failing open:', err.message);
+      console.error('[limiter] rate-limit check failed:', err.message);
       res.set('X-RateLimit-Error', 'limiter-unavailable');
-      
-      // Emit a dashboard event so the UI graph and stats still work when failing open
       emit({
-        type: 'allowed',
+        type: 'error',
         algorithm: routeCfg.algorithm,
         route: routeScope,
         limit: routeCfg.limit,
@@ -131,7 +126,10 @@ function rateLimiter(opts = {}) {
         latencyMs: Date.now() - startedAt,
       });
 
-      return next();
+      return res.status(503).json({
+        error: 'rate_limiter_unavailable',
+        message: 'The request could not be checked against the rate limit.',
+      });
     }
 
     setRateLimitHeaders(res, result, routeCfg);

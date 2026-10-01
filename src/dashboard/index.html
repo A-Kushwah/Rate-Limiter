@@ -301,10 +301,11 @@
             <div>
               <label>REQUESTS / BURST</label>
               <input id="n" type="number" value="20" min="1" max="500" />
+              <div id="quota-hint" class="meta">Loading this endpoint's rate limit…</div>
             </div>
             <div>
               <label>RPS (LOOP)</label>
-              <input id="rps" type="number" value="5" min="1" max="100" />
+              <input id="rps" type="number" value="100" min="1" max="100" />
             </div>
           </div>
 
@@ -392,6 +393,7 @@
     function appendLog(evt) {
       const div = document.createElement('div');
       div.className = evt.allowed ? 'allowed' : 'blocked';
+      const unavailable = evt.type === 'error';
 
       const timeSpan = document.createElement('span');
       timeSpan.style.color = '#555555';
@@ -399,10 +401,12 @@
 
       const pill = document.createElement('span');
       pill.className = `pill ${evt.allowed ? 'green' : 'red'}`;
-      pill.textContent = evt.allowed ? 'OK' : '429';
+      pill.textContent = unavailable ? 'UNAVAILABLE' : evt.allowed ? 'OK' : '429';
 
       const detail = document.createElement('span');
-      detail.textContent = ` ${evt.algorithm} ${evt.route} (rem=${evt.remaining})`;
+      detail.textContent = unavailable
+        ? ` ${evt.algorithm} ${evt.route} (rate limiter unavailable)`
+        : ` ${evt.algorithm} ${evt.route} (rem=${evt.remaining})`;
 
       div.append(timeSpan, ' ', pill, detail);
       logEl.prepend(div);
@@ -423,13 +427,17 @@
       ws.onmessage = (m) => {
         try {
           const evt = JSON.parse(m.data);
-          if (evt.type === 'allowed' || evt.type === 'blocked') onEvent(evt);
+          if (evt.type === 'allowed' || evt.type === 'blocked' || evt.type === 'error') onEvent(evt);
         } catch {}
       };
     }
     connect();
 
     function onEvent(evt) {
+      if (evt.type === 'error') {
+        appendLog({ ...evt, allowed: false });
+        return;
+      }
       stats[evt.type === 'allowed' ? 'allowed' : 'blocked']++;
       $('allowed-count').textContent = String(stats.allowed);
       $('blocked-count').textContent = String(stats.blocked);
@@ -453,10 +461,62 @@
         appendLog({ allowed: false, algorithm: algo, route: 'config', remaining: 0, at: Date.now() });
       }
     }
-    $('algo').onchange = (e) => setAlgorithm(e.target.value);
+    let dashboardConfig = null;
+    let requestCountCustomized = false;
+    let requestRateCustomized = false;
+    const requestCountInput = $('n');
+    requestCountInput.addEventListener('input', () => { requestCountCustomized = true; });
+    $('rps').addEventListener('input', () => { requestRateCustomized = true; });
+
+    function updateQuotaHint() {
+      if (!dashboardConfig) return;
+      const [method, routePath] = $('endpoint').value.split(' ');
+      const methodPath = `${method} ${routePath}`;
+      const routes = dashboardConfig.routes || {};
+      let matched = Object.prototype.hasOwnProperty.call(routes, methodPath) ? methodPath : null;
+      if (!matched) {
+        for (const prefix of Object.keys(routes)) {
+          const candidate = prefix.includes(' ') ? methodPath : routePath;
+          if (candidate.startsWith(prefix) && (!matched || prefix.length > matched.length)) {
+            matched = prefix;
+          }
+        }
+      }
+      const route = matched ? routes[matched] : {};
+      const limit = route.limit ?? dashboardConfig.limit;
+      const windowMs = route.windowMs ?? dashboardConfig.windowMs;
+      const algorithm = route.algorithm || $('algo').value;
+      const burst = route.burst ?? dashboardConfig.burst;
+      const capacity = limit + (algorithm === 'token-bucket' ? burst : 0);
+      const refillRate = limit * 1000 / windowMs;
+      const testCapacity = algorithm === 'fixed-window' || algorithm === 'sliding-window'
+        ? capacity * 2
+        : capacity;
+      const defaultRequestRate = Math.max(100, Math.ceil(refillRate * 2));
+      if (!requestRateCustomized) $('rps').value = String(defaultRequestRate);
+      const requestRate = Number($('rps').value) || defaultRequestRate;
+      const netConsumptionRate = 1 - refillRate / requestRate;
+      const requestsToBlock = netConsumptionRate > 0
+        ? Math.ceil(testCapacity / netConsumptionRate) + 1
+        : testCapacity + 1;
+      requestCountInput.max = String(Math.max(500, requestsToBlock));
+      $('rps').max = String(Math.max(100, defaultRequestRate));
+      $('quota-hint').textContent = netConsumptionRate > 0
+        ? `${algorithm}: allows ${capacity} immediately; default test sends ${requestsToBlock} at ${requestRate} RPS.`
+        : `${algorithm}: requests at ${requestRate} RPS do not exceed its ${refillRate.toFixed(1)} RPS refill rate. Increase RPS to trigger a block.`;
+      if (!requestCountCustomized) requestCountInput.value = String(requestsToBlock);
+    }
+
+    $('algo').onchange = (e) => {
+      setAlgorithm(e.target.value);
+      updateQuotaHint();
+    };
+    $('endpoint').onchange = updateQuotaHint;
 
     fetch('/config').then(r => r.json()).then(c => {
+      dashboardConfig = c;
       if (c.algorithm && $('algo').value !== c.algorithm) $('algo').value = c.algorithm;
+      updateQuotaHint();
     }).catch(() => {});
 
     // ---- Firing requests ----
@@ -471,11 +531,15 @@
       }
       try {
         const res = await fetch(url, init);
-        if (!res.ok && res.status !== 429) {
-          appendLog({ allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
+        if (res.status === 429 && (!ws || ws.readyState !== WebSocket.OPEN)) {
+          appendLog({ type: 'blocked', allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
+        } else if (res.status === 503 && res.headers.get('X-RateLimit-Error') && (!ws || ws.readyState !== WebSocket.OPEN)) {
+          appendLog({ type: 'error', allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
+        } else if (!res.ok && res.status !== 429 && res.status !== 503) {
+          appendLog({ type: 'error', allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
         }
       } catch (e) {
-        appendLog({ allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
+        appendLog({ type: 'error', allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
       }
     }
 
