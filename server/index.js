@@ -10,6 +10,7 @@ const config = require('../src/config');
 const { client: redis, connect: connectRedis, isReady: redisReady } = require('../src/redis');
 const { loadScripts } = require('../src/algorithms');
 const { rateLimiter } = require('../src/middleware/limiter');
+const { configRateLimit } = require('../src/middleware/config-rate-limit');
 const { subscribe, snapshot } = require('../src/events');
 const demoApi = require('../src/demo/api');
 
@@ -29,30 +30,6 @@ function securityHeaders(req, res, next) {
     "frame-ancestors 'none'"
   );
   next();
-}
-
-// Tiny in-process rate limiter for the /config mutation endpoint so an
-// attacker can't thrash the in-memory algorithm state.
-function configRateLimit() {
-  const hits = new Map(); // ip -> { count, resetAt }
-  const WINDOW_MS = 60_000;
-  const LIMIT = 10;
-  return (req, res, next) => {
-    const ip = req.ip || 'unknown';
-    const now = Date.now();
-    const entry = hits.get(ip);
-    if (!entry || entry.resetAt < now) {
-      hits.set(ip, { count: 1, resetAt: now + WINDOW_MS });
-      return next();
-    }
-    if (entry.count >= LIMIT) {
-      const retry = Math.ceil((entry.resetAt - now) / 1000);
-      res.set('Retry-After', String(retry));
-      return res.status(429).json({ error: 'too_many_config_changes' });
-    }
-    entry.count++;
-    next();
-  };
 }
 
 async function main() {
@@ -184,6 +161,8 @@ async function main() {
   // Graceful shutdown so a deploy or restart does not leave requests hanging.
   const shutdown = (sig) => () => {
     console.log(`[shutdown] ${sig}`);
+    for (const ws of wss.clients) ws.close(1001, 'Server shutting down');
+    wss.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 5_000).unref();
   };

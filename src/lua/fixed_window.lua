@@ -2,6 +2,8 @@
 -- KEYS[1] = bucket key  e.g. rl:fw:<scope>:<id>:<window-start>
 -- ARGV[1] = limit       (integer)
 -- ARGV[2] = window TTL  (seconds, integer)
+-- ARGV[3] = request time (epoch ms)
+-- ARGV[4] = window end   (epoch ms)
 --
 -- Returns: { allowed (0/1), remaining, reset_at_ms, retry_after_ms }
 --
@@ -14,6 +16,8 @@
 local key      = KEYS[1]
 local limit    = tonumber(ARGV[1])
 local ttl_sec  = tonumber(ARGV[2])
+local now_ms   = tonumber(ARGV[3])
+local reset_at = tonumber(ARGV[4])
 
 local current = redis.call('INCR', key)
 if current == 1 then
@@ -28,9 +32,8 @@ if pttl < 0 then
   pttl = ttl_sec * 1000
 end
 
-local reset_at = tonumber(ARGV[3]) + pttl
 if current <= limit then
   return {1, limit - current, reset_at, 0}
 else
-  return {0, 0, reset_at, pttl}
+  return {0, 0, reset_at, math.max(0, reset_at - now_ms)}
 end

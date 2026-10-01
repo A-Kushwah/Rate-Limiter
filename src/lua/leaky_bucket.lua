@@ -1,9 +1,7 @@
 -- Leaky Bucket
--- Requests drain at a constant rate (think: a queue with a leak at the
--- bottom). The bucket has a fixed capacity; if full, new requests spill
--- (i.e. are rejected). Unlike token bucket, refill is constant per tick,
--- not proportional to elapsed time — but the *steady-state* behaviour is
--- the same: smooth output rate.
+-- The bucket drains at a constant rate. If full, new requests are rejected.
+-- This implementation limits immediate admission; it does not queue requests
+-- for delayed processing. Unlike token bucket, it has no extra burst capacity.
 --
 -- Implementation: store the current water level. On each request, compute
 -- how much has leaked out since last call (elapsed * rate), clamp at 0,

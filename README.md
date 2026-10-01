@@ -55,9 +55,13 @@ I kept running into the gap between reading about rate limiting and actually see
 1. Express receives a request to `/api/...`.
 2. The global limiter middleware resolves a client identity (API key, user id, IP, or a composite) based on `KEY_STRATEGY`.
 3. It picks the algorithm and limits from the most specific `ROUTES_JSON` override, or falls back to the global defaults.
-4. It calls `algorithms.check(algo, scope, id, opts)`, which issues a single `EVALSHA` to Redis. The Lua script does read–modify–write atomically, so even with 1,000 concurrent requests the count is exact.
+4. It calls `algorithms.check(algo, scope, id, opts)`, which normally issues a single `EVALSHA` to Redis and falls back to `EVAL` if Redis has flushed its script cache. The Lua script does read–modify–write atomically, so concurrent requests cannot interleave the counter update.
 5. The response includes `X-RateLimit-Limit / Remaining / Reset`. If blocked, the response is 429 with `Retry-After`.
 6. An event is published to the in-process pub/sub; the WebSocket server fans it out to the dashboard.
+
+Unmatched route paths use a shared per-method, per-mount-point bucket rather than a client-controlled path as a Redis key. This prevents arbitrary 404 paths from creating unbounded limiter keys; add a `ROUTES_JSON` prefix override when a route needs its own bucket.
+
+`WINDOW_MS` and `LIMIT` must be positive integers; `BURST` must be a non-negative integer. Invalid numeric settings or malformed route overrides fail startup rather than silently disabling the configured limiter.
 
 ---
 
@@ -67,9 +71,9 @@ I kept running into the gap between reading about rate limiting and actually see
 |---|---|---|---|---|
 | **Fixed Window Counter** | O(1) | approximate | Up to 2× limit at window boundary | rough abuse prevention, very cheap |
 | **Sliding Window Log** | O(limit) | exact | No extra burst | low-volume, accuracy-critical (financial) |
-| **Sliding Window Counter (hybrid)** | O(1) | ~1% error | bounded to ~2× limit | **production default** |
+| **Sliding Window Counter (hybrid)** | O(1) | approximate | bounded to ~2× limit | **production default** |
 | **Token Bucket** | O(1) | exact | Allows burst up to `limit + burst` | APIs that benefit from short spikes (login retries, search) |
-| **Leaky Bucket** | O(1) | exact | Smooths output, no extra burst | downstream services needing steady rate |
+| **Leaky Bucket** | O(1) | exact | No extra configurable burst | downstream services needing a strict immediate-admission cap |
 
 ### 1. Fixed Window Counter
 - **How it works:** Each request `INCR`s a counter for the current wall-clock window (e.g. minute). When the counter exceeds the limit, the request is blocked. The key auto-expires at the end of the window.
@@ -81,15 +85,15 @@ I kept running into the gap between reading about rate limiting and actually see
 
 ### 3. Sliding Window Counter (hybrid) — **most production-realistic**
 - **How it works:** Tracks the count for the *current* window and the *previous* window. Estimates the rolling count as `cur + prev × (1 − elapsed/window)`. This is the formula Cloudflare documents in their blog post.
-- **Tradeoff:** O(1) memory, accuracy within ~1% for smooth traffic. The worst case (a huge burst at the window boundary) is bounded to ~2× the limit — still a real bound, unlike naive fixed window.
+- **Tradeoff:** O(1) memory and an approximate rolling count. A full previous bucket can contribute nearly one extra limit near the transition, so a rolling window can admit close to 2× the configured limit in an adversarial pattern; this is not an instantaneous 2× burst at the boundary.
 
 ### 4. Token Bucket
-- **How it works:** Imagine a bucket that fills with tokens at a steady rate (e.g. 1/sec). Each request takes one token. If the bucket is empty, the request is blocked. The bucket has a maximum capacity of `limit + burst`, so a long-idle client can spend accumulated tokens all at once.
+- **How it works:** Tokens refill at `limit / windowMs` and each request takes one token. If the bucket is empty, the request is blocked. Its maximum capacity is `limit + burst`, so a long-idle client can spend accumulated tokens all at once; `burst` increases capacity but not the sustained refill rate.
 - **Tradeoff:** Best algorithm when bursts are useful: a search client that hasn't searched in 5 minutes should be allowed to issue a few searches quickly. **This is the default in this project.**
 
 ### 5. Leaky Bucket
 - **How it works:** Each request adds 1 unit of "water" to a bucket. The bucket leaks at a constant rate. If the bucket is full, the new request is dropped.
-- **Tradeoff:** Constant *output* rate regardless of input — useful when the thing downstream of the rate limiter (a database, a partner API) cannot tolerate bursts. Slightly less user-friendly than token bucket because the client can't "save up" and burst.
+- **Tradeoff:** Caps immediate admission at `limit` and rejects excess requests; it does not queue them for later processing. Use a real queue if downstream work must be delivered at a constant output rate.
 
 ### Why Lua scripts (the part most candidates get wrong)
 
@@ -104,7 +108,7 @@ if (count > limit) return block();
 
 The problem: between `INCR` and `EXPIRE`, the process can crash, leaving a key with no TTL. Between `INCR` and the `if`, a thousand other clients can also `INCR`, and you've already let too many through before you decide to block. The correct fix is **atomic** execution on the Redis server.
 
-This project uses one Lua script per algorithm. Each script is loaded once with `SCRIPT LOAD` and called with `EVALSHA` for cheap execution. The whole read-modify-write happens inside a single Redis command — no other client can interleave. ioredis transparently falls back to `EVAL` on `NOSCRIPT` and reloads.
+This project uses one Lua script per algorithm. Each script is loaded once with `SCRIPT LOAD` and called with `EVALSHA` for cheap execution. If Redis has flushed its script cache, the dispatcher retries that request with `EVAL`; scripts are also loaded again when Redis reconnects. The whole read-modify-write happens inside a single Redis command — no other client can interleave.
 
 The relevant code lives in `src/lua/*.lua`. The dispatcher in `src/algorithms/index.js` is a single `switch` on algorithm; the middleware in `src/middleware/limiter.js` is algorithm-agnostic. If you add a sixth algorithm, you add one Lua file and one `case` in the switch — the rest of the system doesn't change.
 
@@ -190,7 +194,7 @@ The dashboard's algorithm dropdown does the same thing — pick one and fire a b
 npm test
 ```
 
-This exercises every algorithm's correctness — boundary cases, refilling, race-condition safety with 100 concurrent requests. Needs a reachable Redis (the tests use the same `REDIS_URL` as the app).
+This exercises every algorithm's correctness — boundary cases, refilling, and race-condition safety with 100 concurrent requests. Needs a reachable Redis (the tests use the same `REDIS_URL` as the app) and only clears test keys under the `unit` scope.
 
 ### Run the load test
 
@@ -218,7 +222,7 @@ Latency p99:      12 ms
 ====================================
 ```
 
-That asymmetry (10 OK, 4990 blocked) is the proof: the limiter held the line at exactly the configured limit while sustaining 500 requests/second.
+The 429 count confirms the limiter rejected over-limit requests. Exact accepted totals depend on how the test overlaps the fixed-window boundary; 4xx responses other than 429 are reported separately and do not count as limiter blocks.
 
 ---
 

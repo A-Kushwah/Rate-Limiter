@@ -1,9 +1,8 @@
 -- Sliding Window Counter (hybrid)
 -- Combines a fixed-window count for the current bucket with a weighted
 -- estimate of the previous bucket to approximate a true sliding window.
--- Cost: O(1) memory per key, accuracy within ~1% of the true sliding log
--- for smooth traffic. Worst case (sudden burst at boundary) is ~2x the
--- configured limit — still bounded, unlike naive fixed window.
+-- Cost: O(1) memory per key, with an approximate rolling count. Worst case
+-- (sudden burst near a boundary) is close to 2x the configured limit.
 --
 -- KEYS[1] = current bucket key   rl:sw:<scope>:<id>:<cur_window_start>
 -- KEYS[2] = previous bucket key  rl:sw:<scope>:<id>:<prev_window_start>
@@ -44,8 +43,17 @@ if weighted < limit then
   if remaining < 0 then remaining = 0 end
   return {1, remaining, cur_start + window_ms, 0}
 else
-  -- Reset is when enough of the previous window rolls off
-  local retry_after = math.ceil(elapsed + (weighted - limit + 1) * (window_ms / limit))
+  local retry_after
+  if cur_count < limit and prev_count > 0 then
+    local threshold_elapsed = window_ms * (1 - (limit - cur_count) / prev_count)
+    retry_after = math.floor(threshold_elapsed - elapsed) + 1
+  else
+    local next_elapsed = 0
+    if cur_count > 0 then
+      next_elapsed = window_ms * (1 - limit / cur_count)
+    end
+    retry_after = (window_ms - elapsed) + math.floor(next_elapsed) + 1
+  end
   if retry_after < 0 then retry_after = 0 end
   return {0, 0, cur_start + window_ms, retry_after}
 end

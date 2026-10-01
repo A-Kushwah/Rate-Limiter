@@ -11,8 +11,7 @@
 // used — we hammer a single client. To show the limiter doing its job,
 // we configure the target with limit=10, burst=0 from the server side
 // (set ALGORITHM=fixed-window LIMIT=10 BURST=0 WINDOW_MS=60000 in the
-// env you point this at), then fire 200 requests in 5 seconds and
-// observe exactly 10 200s and 190 429s.
+// env you point this at), then run this script and observe 429 responses.
 
 const autocannon = require('autocannon');
 
@@ -35,11 +34,8 @@ const instance = autocannon({
   const total = result.requests.sent;
   const twoxx = result['2xx'] || 0;
   const fourxx = result['4xx'] || 0;
-  // autocannon v7 doesn't populate result.codes the way older versions did;
-  // derive the 429 count by subtracting the global limiter's 200 responses
-  // from the 4xx bucket. For a clean limiter test the only 4xx should be 429.
+  const blocked = Number(((result.statusCodeStats || {})['429'] || {}).count || 0);
   const ok = twoxx; // 200s; the demo endpoint never returns 2xx other than 200
-  const blocked = fourxx;
 
   console.log('\n========= Load Test Report =========');
   console.log(`Target:           ${target}${path}`);
@@ -47,7 +43,8 @@ const instance = autocannon({
   console.log(`Connections:      ${connections}  (pipelining=${pipelining})`);
   console.log(`Total requests:   ${total}`);
   console.log(`HTTP 200:         ${ok}`);
-  console.log(`HTTP 4xx:         ${fourxx}  (should be 429s — limiter blocked)`);
+  console.log(`HTTP 429:         ${blocked}`);
+  console.log(`HTTP other 4xx:   ${Math.max(0, fourxx - blocked)}`);
   console.log(`HTTP 5xx:         ${result['5xx'] || 0}`);
   console.log(`Throughput:       ${result.requests.average} req/s (avg)`);
   console.log(`Latency p50:      ${result.latency.p50} ms`);
@@ -58,11 +55,10 @@ const instance = autocannon({
 
   // Sanity: with a low limit, the limiter MUST have blocked the majority.
   // If it didn't, something is broken.
-  if (blocked === 0 && ok > 0) {
-    console.log('NOTE: No 429s observed. Either limit is high enough that we');
-    console.log('      didn\'t hit it, or the limiter isn\'t enforcing. Re-run');
-    console.log('      the server with ALGORITHM=fixed-window LIMIT=10 BURST=0');
-    console.log('      to demonstrate the limiter holding the line.');
+  if (blocked === 0 || total === 0) {
+    console.error('ERROR: No rate-limited 429 responses were observed.');
+    console.error('       Start the server with ALGORITHM=fixed-window LIMIT=10 BURST=0');
+    console.error('       to demonstrate the limiter holding the line.');
     process.exit(2);
   }
   process.exit(0);

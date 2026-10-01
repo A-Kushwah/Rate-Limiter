@@ -7,26 +7,35 @@
 // Run with:  npm test
 // Requires:  REDIS_URL pointing to a reachable Redis instance (defaults to
 //            127.0.0.1:6379). The tests create and drop their own keys
-//            under `rl-test:*` so they don't interfere with app state.
+// under the `unit` scope so they don't interfere with app state.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { client: redis, connect, isReady } = require('../src/redis');
-const { loadScripts, check } = require('../src/algorithms');
+const { loadScripts, check, makeKey } = require('../src/algorithms');
 
 test.before(async () => {
-  await connect();
-  await loadScripts();
+  try {
+    await connect();
+    await loadScripts();
+  } catch (err) {
+    if (redis.status !== 'end' && typeof redis.disconnect === 'function') redis.disconnect();
+    throw new Error(`Unable to initialize Redis Lua scripts for algorithm tests: ${err.message}`);
+  }
   // Clear any leftover state from a previous run. Test IDs are unique
   // per-test (tb-1, sw-2, fw-race, etc.) so collisions are unlikely, but
   // a stale key from a previous run would skew the concurrent tests.
-  const keys = await redis.keys('rl:*');
+  const keys = await redis.keys('rl:*:unit:*');
   if (keys.length) await redis.del(...keys);
 });
 
 test.after(async () => {
-  const keys = await redis.keys('rl:*');
+  if (!isReady()) {
+    if (redis.status !== 'end' && typeof redis.disconnect === 'function') redis.disconnect();
+    return;
+  }
+  const keys = await redis.keys('rl:*:unit:*');
   if (keys.length) await redis.del(...keys);
   await redis.quit();
 });
@@ -51,6 +60,19 @@ test('fixed-window: allows exactly limit, then blocks', async () => {
   assert.equal(r[4].remaining, 0);
   assert.equal(r[5].remaining, 0);
   assert.ok(r[5].retryAfterMs > 0);
+});
+
+test('fixed-window: reset time and retry delay end at the bucket boundary', async () => {
+  const id = 'fw-reset';
+  const windowMs = 3_600_000;
+  const before = Date.now();
+  const expectedResetAt = (Math.floor(before / windowMs) + 1) * windowMs;
+  const opts = { limit: 1, windowMs };
+  await runN('fixed-window', id, 1, opts);
+  const blocked = await check('fixed-window', 'unit', id, opts);
+  assert.equal(blocked.resetAt, expectedResetAt);
+  assert.ok(blocked.retryAfterMs > 0);
+  assert.ok(blocked.retryAfterMs <= blocked.resetAt - Date.now() + 100);
 });
 
 // -------- Sliding Log --------
@@ -94,55 +116,82 @@ test('sliding-window: weighted count from previous window', async () => {
   assert.equal(r.allowed, true, 'after two full windows, fresh allowance');
 });
 
-test('sliding-window: weighted count from previous window blocks when prev was at limit', async () => {
-  // At the very start of a new window, the previous window's full count
-  // is still in scope (weight = 1.0). So if prev == limit, weighted == limit
-  // and the request must be blocked until time passes and prev rolls off.
+test('sliding-window: fractional previous count permits a boundary allowance', async () => {
   const id = 'sw-2';
-  const opts = { limit: 3, windowMs: 5000 };  // long window so timing races don't matter
-  // Fill window 1
-  await runN('sliding-window', id, 3, opts);
-  // Wait until we're well into window 2 (just over windowMs)
-  await new Promise(res => setTimeout(res, opts.windowMs + 20));
-  // At this point elapsed = ~20ms, weight = (5000-20)/5000 = 0.996
-  // weighted = 0 + 3 * 0.996 = 2.988 < 3 = limit, so it ALLOWS by ~0.012
-  // That tiny gap is the well-known "approximation error" of the hybrid
-  // algorithm. Let's just assert the algorithm returned a sensible value
-  // and didn't explode — the more important property is the "no double
-  // burst at boundary" test below.
-  const r = await check('sliding-window', 'unit', id, opts);
-  assert.ok(['allowed', 'blocked'].includes(r.allowed ? 'allowed' : 'blocked'));
+  const limit = 3;
+  const windowMs = 1000;
+  const curStart = Math.floor(Date.now() / windowMs) * windowMs;
+  const now = curStart + 20;
+  const prevKey = makeKey('sliding-window', 'unit', id, `:${curStart - windowMs}`);
+  await redis.set(prevKey, String(limit));
 
-  // A more reliable property: with prev=limit and cur=0, the moment we
-  // cross into the new window the *sum* of cur+weighted is bounded by ~2x limit.
-  // The key invariant we DO want: we never get *more than* limit + prev
-  // allowed across the transition.
-  const id2 = 'sw-3';
-  await runN('sliding-window', id2, 3, { limit: 3, windowMs: 1000 });
-  // At the very start of the next window, weight is still 1
-  await new Promise(res => setTimeout(res, 1001));
-  let allowedAcrossBoundary = 0;
-  for (let i = 0; i < 10; i++) {
-    const x = await check('sliding-window', 'unit', id2, { limit: 3, windowMs: 1000 });
-    if (x.allowed) allowedAcrossBoundary++;
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    const result = await check('sliding-window', 'unit', id, { limit, windowMs });
+    assert.equal(result.allowed, true);
+    assert.equal(result.remaining, 0);
+  } finally {
+    Date.now = originalNow;
   }
-  // At most 3 should slip through (the new window's quota), even though we
-  // just rolled in from a full previous window.
-  assert.ok(allowedAcrossBoundary <= 4, `allowed ${allowedAcrossBoundary}, expected <= 4`);
+});
+
+test('sliding-window: blocks further requests after boundary allowance', async () => {
+  const id = 'sw-boundary';
+  const limit = 3;
+  const windowMs = 1000;
+  const curStart = Math.floor(Date.now() / windowMs) * windowMs;
+  const now = curStart + 1;
+  const prevKey = makeKey('sliding-window', 'unit', id, `:${curStart - windowMs}`);
+  await redis.set(prevKey, String(limit));
+
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => check('sliding-window', 'unit', id, { limit, windowMs }))
+    );
+    assert.equal(results.filter(result => result.allowed).length, 1);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('sliding-window: retry delay is relative to the current time', async () => {
+  const id = 'sw-retry';
+  const limit = 3;
+  const windowMs = 10_000;
+  const curStart = Math.floor(Date.now() / windowMs) * windowMs;
+  const now = curStart + windowMs - 2_000;
+  const curKey = makeKey('sliding-window', 'unit', id, `:${curStart}`);
+  const prevKey = makeKey('sliding-window', 'unit', id, `:${curStart - windowMs}`);
+  await redis.set(curKey, String(limit));
+  await redis.set(prevKey, String(limit));
+
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    const result = await check('sliding-window', 'unit', id, { limit, windowMs });
+    assert.equal(result.allowed, false);
+    assert.equal(result.resetAt, curStart + windowMs);
+    assert.equal(result.retryAfterMs, windowMs - (now - curStart) + 1);
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 // -------- Token Bucket --------
 test('token-bucket: allows burst up to capacity, then steady refill', async () => {
   const id = 'tb-1';
-  const opts = { limit: 3, windowMs: 1000, burst: 2 }; // capacity = 5, rate = 5/s
+  const opts = { limit: 3, windowMs: 1000, burst: 2 }; // capacity = 5, rate = 3/s
   // Burst 5
   const r = await runN('token-bucket', id, 5, opts);
   assert.equal(r.every(x => x.allowed), true, 'first 5 should fit capacity');
   // 6th should be blocked
   const r6 = await check('token-bucket', 'unit', id, opts);
   assert.equal(r6.allowed, false);
-  // After 250ms one more token should be available (5/s = 1 every 200ms)
-  await new Promise(res => setTimeout(res, 260));
+  // Refill follows the configured limit: 3 tokens per second.
+  await new Promise(res => setTimeout(res, 350));
   const r7 = await check('token-bucket', 'unit', id, opts);
   assert.equal(r7.allowed, true, 'after refill interval, allowed again');
 });
@@ -153,6 +202,14 @@ test('token-bucket: never allows more than capacity in a single instant', async 
   const r = await runN('token-bucket', id, 12, opts);
   const allowed = r.filter(x => x.allowed).length;
   assert.equal(allowed, 10, 'exactly capacity allowed');
+});
+
+test('token-bucket: idle-key TTL cannot refill capacity early', async () => {
+  const id = 'tb-ttl';
+  const opts = { limit: 1, windowMs: 10_000, burst: 100 };
+  await check('token-bucket', 'unit', id, opts);
+  const ttl = await redis.pttl(makeKey('token-bucket', 'unit', id));
+  assert.ok(ttl > 1_010_000, `expected TTL to cover full refill period, got ${ttl}ms`);
 });
 
 // -------- Leaky Bucket --------
@@ -169,6 +226,12 @@ test('leaky-bucket: rejects when bucket full, allows after leak', async () => {
   await new Promise(res => setTimeout(res, 260));
   const r7 = await check('leaky-bucket', 'unit', id, opts);
   assert.equal(r7.allowed, true);
+});
+
+test('leaky-bucket: burst does not increase its immediate capacity', async () => {
+  const opts = { limit: 2, windowMs: 1000, burst: 20 };
+  const results = await runN('leaky-bucket', 'lb-burst', 3, opts);
+  assert.deepEqual(results.map(result => result.allowed), [true, true, false]);
 });
 
 // -------- Idempotency / shape --------

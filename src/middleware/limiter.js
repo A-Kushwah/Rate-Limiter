@@ -18,7 +18,7 @@ function resolveId(strategy, req) {
   switch (strategy) {
     case 'apiKey':   return apiKey || `ip:${ip}`;
     case 'userId':   return userId || `ip:${ip}`;
-    case 'composite':return [apiKey, userId, ip].filter(Boolean).join('|');
+    case 'composite':return JSON.stringify([apiKey, userId, ip]);
     case 'ip':
     default:         return ip;
   }
@@ -78,22 +78,18 @@ function setRateLimitHeaders(res, result, opts) {
   }
 }
 
-// Cap how much of the raw request path we'll use to build a scope/Redis-key.
-// Without this, an attacker can hit /api/<random-unique-string> repeatedly
-// and force the app to create an unbounded number of distinct rate-limit
-// buckets in Redis — a cheap key-space/memory exhaustion DoS, since scope
-// is derived straight from client-controlled input (the URL path).
-const MAX_SCOPE_PATH_LEN = 200;
-
-function safeScopePath(fullPath) {
-  return fullPath.length > MAX_SCOPE_PATH_LEN
-    ? fullPath.slice(0, MAX_SCOPE_PATH_LEN)
-    : fullPath;
+function resolveRouteScope(method, fullPath, baseUrl, explicitScope) {
+  if (explicitScope) return explicitScope;
+  const matchedPrefix = matchedRoutePrefix(method, fullPath);
+  if (matchedPrefix) return matchedPrefix;
+  // Unknown/unconfigured paths are client-controlled. Group them by method
+  // and mount point instead of creating an unbounded Redis key per URL.
+  return `${method} ${baseUrl || '*'}/*`;
 }
 
 // Build the middleware factory. When no explicit scope is given,
 // the middleware derives one from the matched route prefix or, failing
-// that, from method + path.
+// that, from a bounded method + mount-point scope.
 function rateLimiter(opts = {}) {
   const explicitScope = opts.scope || null;
 
@@ -102,11 +98,12 @@ function rateLimiter(opts = {}) {
     const routeCfg = resolveRouteConfig(req.method, fullPath);
     const id = resolveId(config.keyStrategy, req);
 
-    let routeScope = explicitScope;
-    if (!routeScope) {
-      const matchedPrefix = matchedRoutePrefix(req.method, fullPath);
-      routeScope = matchedPrefix || `${req.method} ${safeScopePath(fullPath)}`;
-    }
+    const routeScope = resolveRouteScope(
+      req.method,
+      fullPath,
+      req.baseUrl,
+      explicitScope
+    );
 
     const startedAt = Date.now();
     let result;
@@ -128,7 +125,6 @@ function rateLimiter(opts = {}) {
         type: 'allowed',
         algorithm: routeCfg.algorithm,
         route: routeScope,
-        id,
         limit: routeCfg.limit,
         remaining: 0,
         at: startedAt,
@@ -146,7 +142,6 @@ function rateLimiter(opts = {}) {
       type: result.allowed ? 'allowed' : 'blocked',
       algorithm: routeCfg.algorithm,
       route: routeScope,
-      id,
       limit: routeCfg.limit,
       remaining: result.remaining,
       at: startedAt,
@@ -167,4 +162,10 @@ function rateLimiter(opts = {}) {
   };
 }
 
-module.exports = { rateLimiter, resolveId, resolveRouteConfig, matchedRoutePrefix };
+module.exports = {
+  rateLimiter,
+  resolveId,
+  resolveRouteConfig,
+  matchedRoutePrefix,
+  resolveRouteScope,
+};

@@ -7,7 +7,7 @@
 -- ARGV[1] = capacity         (max tokens == limit + burst)
 -- ARGV[2] = refill_rate      (tokens per second)
 -- ARGV[3] = now_ms
--- ARGV[4] = ttl_sec          (so abandoned keys don't pile up)
+-- ARGV[4] = ttl_sec          (at least the time needed to refill capacity)
 --
 -- State: { tokens: float, ts: int } in a hash.
 -- On each request we:

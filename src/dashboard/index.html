@@ -469,17 +469,11 @@
         init.headers = { 'content-type': 'application/json' };
         init.body = JSON.stringify({ user: 'demo', pass: 'demo' });
       }
-      const start = performance.now();
       try {
         const res = await fetch(url, init);
-        const ms = Math.round(performance.now() - start);
-        appendLog({
-          allowed: res.status !== 429,
-          algorithm: $('algo').value,
-          route: endpoint,
-          remaining: res.headers.get('X-RateLimit-Remaining') || 0,
-          at: Date.now(),
-        });
+        if (!res.ok && res.status !== 429) {
+          appendLog({ allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
+        }
       } catch (e) {
         appendLog({ allowed: false, algorithm: $('algo').value, route: endpoint, remaining: 0, at: Date.now() });
       }

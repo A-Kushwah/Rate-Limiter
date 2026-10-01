@@ -22,7 +22,12 @@ process.env.ALGORITHM = 'token-bucket';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { resolveRouteConfig, matchedRoutePrefix } = require('../src/middleware/limiter');
+const {
+  resolveRouteConfig,
+  matchedRoutePrefix,
+  resolveRouteScope,
+  resolveId,
+} = require('../src/middleware/limiter');
 
 test('exact METHOD /path override applies, including explicit burst: 0', () => {
   const cfg = resolveRouteConfig('POST', '/api/login');
@@ -49,4 +54,21 @@ test('bare path prefix (no method) matches any method', () => {
 test('unconfigured route falls back to global defaults', () => {
   const cfg = resolveRouteConfig('GET', '/api/expensive');
   assert.deepEqual(cfg, { algorithm: 'token-bucket', limit: 60, windowMs: 60000, burst: 20 });
+});
+
+test('unknown routes share a bounded scope instead of allocating per-path keys', () => {
+  assert.equal(resolveRouteScope('GET', '/api/random-one', '/api'), 'GET /api/*');
+  assert.equal(resolveRouteScope('GET', '/api/random-two', '/api'), 'GET /api/*');
+});
+
+test('composite client identifiers do not collide when fields contain separators', () => {
+  const request = (apiKey, userId, ip) => ({
+    get: header => header === 'x-api-key' ? apiKey : header === 'x-user-id' ? userId : null,
+    user: null,
+    ip,
+    socket: { remoteAddress: ip },
+  });
+  const first = resolveId('composite', request('a|b', 'c', 'd'));
+  const second = resolveId('composite', request('a', 'b|c', 'd'));
+  assert.notEqual(first, second);
 });

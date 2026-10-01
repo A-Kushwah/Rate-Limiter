@@ -6,8 +6,8 @@ const crypto = require('crypto');
 const { client } = require('../redis');
 
 // Load the Lua scripts once at boot. SCRIPT LOAD returns a SHA1 that I can
-// reuse with EVALSHA for cheap execution; ioredis will fall back to EVAL on
-// NOSCRIPT if needed.
+// reuse with EVALSHA for cheap execution. If Redis has flushed its script
+// cache, retry that request with EVAL while the next reconnect reloads scripts.
 
 const SCRIPTS = {
   'fixed-window': fs.readFileSync(path.join(__dirname, '..', 'lua/fixed_window.lua'), 'utf8'),
@@ -48,9 +48,21 @@ function uniqueMember() {
   return `${Date.now()}:${crypto.randomBytes(6).toString('hex')}`;
 }
 
+async function evalScript(name, numKeys, ...args) {
+  try {
+    return await client.evalsha(SHAS[name], numKeys, ...args);
+  } catch (err) {
+    if (!err || typeof err.message !== 'string' || !err.message.startsWith('NOSCRIPT')) {
+      throw err;
+    }
+    return client.eval(SCRIPTS[name], numKeys, ...args);
+  }
+}
+
 // `scope` is typically the route pattern, e.g. "GET /login". The id is the
 // resolved key (apiKey, userId, ip, or composite of those).
 async function check(algorithm, scope, id, opts) {
+  ensureLoaded();
   const { limit, windowMs, burst = 0 } = opts;
   const now = Date.now();
   const key = makeKeyNoSuffix(algorithm, scope, id);
@@ -59,18 +71,19 @@ async function check(algorithm, scope, id, opts) {
   switch (algorithm) {
     case 'fixed-window': {
       const windowStart = Math.floor(now / windowMs) * windowMs;
+      const resetAt = windowStart + windowMs;
       const k = makeKey(algorithm, scope, id, `:${windowStart}`);
-      const ttlSec = Math.ceil(windowMs / 1000) + 1;
-      raw = await client.evalsha(
-        SHAS['fixed-window'],
+      const ttlSec = Math.ceil((resetAt - now) / 1000) + 1;
+      raw = await evalScript(
+        'fixed-window',
         1, k,
-        String(limit), String(ttlSec), String(windowStart)
+        String(limit), String(ttlSec), String(now), String(resetAt)
       );
       break;
     }
     case 'sliding-log': {
-      raw = await client.evalsha(
-        SHAS['sliding-log'],
+      raw = await evalScript(
+        'sliding-log',
         1, key,
         String(limit), String(windowMs), String(now), uniqueMember()
       );
@@ -82,8 +95,8 @@ async function check(algorithm, scope, id, opts) {
       const curKey  = makeKey(algorithm, scope, id, `:${curStart}`);
       const prevKey = makeKey(algorithm, scope, id, `:${prevStart}`);
       const ttlSec = Math.ceil(windowMs / 1000) * 2 + 1;
-      raw = await client.evalsha(
-        SHAS['sliding-window'],
+      raw = await evalScript(
+        'sliding-window',
         2, curKey, prevKey,
         String(limit), String(windowMs), String(now), String(curStart), String(ttlSec)
       );
@@ -91,24 +104,24 @@ async function check(algorithm, scope, id, opts) {
     }
     case 'token-bucket': {
       const capacity = limit + burst;
-      // Refill rate: capacity tokens per (windowMs) seconds
-      const rate = capacity / (windowMs / 1000);
-      const ttlSec = Math.ceil(windowMs / 1000) * 4 + 60;
-      raw = await client.evalsha(
-        SHAS['token-bucket'],
+      const rate = limit / (windowMs / 1000);
+      const ttlSec = Math.ceil(capacity / rate) + 1;
+      raw = await evalScript(
+        'token-bucket',
         1, key,
         String(capacity), String(rate), String(now), String(ttlSec)
       );
       break;
     }
     case 'leaky-bucket': {
-      const capacity = limit + burst;
+      const capacity = limit;
       // Leak rate: limit requests per windowMs seconds (so steady-state output
-      // matches `limit` per window)
+      // matches `limit` per window). This algorithm intentionally has no
+      // additional configurable burst capacity.
       const rate = limit / (windowMs / 1000);
-      const ttlSec = Math.ceil(windowMs / 1000) * 4 + 60;
-      raw = await client.evalsha(
-        SHAS['leaky-bucket'],
+      const ttlSec = Math.ceil(capacity / rate) + 1;
+      raw = await evalScript(
+        'leaky-bucket',
         1, key,
         String(capacity), String(rate), String(now), String(ttlSec)
       );
@@ -127,4 +140,4 @@ async function check(algorithm, scope, id, opts) {
   };
 }
 
-module.exports = { check, loadScripts, makeKey, makeKeyNoSuffix };
+module.exports = { check, loadScripts, makeKey, makeKeyNoSuffix, evalScript };
