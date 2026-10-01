@@ -175,12 +175,16 @@ docker compose up --build
 
 ### Option B: bare Node + local Redis
 
-Requires Node 18+ and a running Redis on `localhost:6379`.
+Requires Node 18+ and Docker. The example `.env` uses `127.0.0.1` because Node runs on the host; the Compose app container uses the internal `redis` service hostname instead.
 
 ```bash
+cp .env.example .env
+docker compose up -d redis
 npm install
-REDIS_URL=redis://127.0.0.1:6379 npm start
+npm start
 ```
+
+Check `http://localhost:3000/health` for `"ok": true` before sending API requests. If Redis is unavailable, API requests deliberately return 503 rather than bypass the rate limit.
 
 ### Switch the algorithm at runtime
 

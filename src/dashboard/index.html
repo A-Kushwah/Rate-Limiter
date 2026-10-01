@@ -268,8 +268,9 @@
         <div class="meta">CS_499: Algorithm Comparison & Real-Time Stream</div>
       </div>
       <div class="meta" style="text-align: right;">
-        STATUS<br/>
-        <span id="ws-state" class="ws-state bad">DISCONNECTED</span>
+        CONNECTIONS<br/>
+        <span id="ws-state" class="ws-state bad">WS DISCONNECTED</span><br/>
+        <span id="redis-state" class="ws-state bad">LIMITER UNKNOWN</span>
       </div>
     </header>
 
@@ -418,9 +419,9 @@
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}/ws`);
-      ws.onopen = () => { $('ws-state').textContent = 'CONNECTED'; $('ws-state').className = 'ws-state ok'; };
+      ws.onopen = () => { $('ws-state').textContent = 'WS CONNECTED'; $('ws-state').className = 'ws-state ok'; };
       ws.onclose = () => {
-        $('ws-state').textContent = 'RECONNECTING…'; $('ws-state').className = 'ws-state bad';
+        $('ws-state').textContent = 'WS RECONNECTING…'; $('ws-state').className = 'ws-state bad';
         setTimeout(connect, 1500);
       };
       ws.onerror = () => ws.close();
@@ -432,6 +433,28 @@
       };
     }
     connect();
+
+    async function refreshHealth() {
+      const indicator = $('redis-state');
+      try {
+        const response = await fetch('/health', { cache: 'no-store' });
+        const health = await response.json();
+        if (response.ok && health.ok) {
+          indicator.textContent = 'LIMITER READY';
+          indicator.className = 'ws-state ok';
+        } else {
+          indicator.textContent = health.redis === 'down'
+            ? 'REDIS DOWN — START REDIS'
+            : 'LIMITER NOT READY — CHECK /HEALTH';
+          indicator.className = 'ws-state bad';
+        }
+      } catch {
+        indicator.textContent = 'LIMITER STATUS UNKNOWN';
+        indicator.className = 'ws-state bad';
+      }
+    }
+    refreshHealth();
+    setInterval(refreshHealth, 5000);
 
     function onEvent(evt) {
       if (evt.type === 'error') {
@@ -501,9 +524,12 @@
         : testCapacity + 1;
       requestCountInput.max = String(Math.max(500, requestsToBlock));
       $('rps').max = String(Math.max(100, defaultRequestRate));
-      $('quota-hint').textContent = netConsumptionRate > 0
+      const algorithmHint = route.algorithm
+        ? `This endpoint overrides the global algorithm with ${algorithm}. `
+        : '';
+      $('quota-hint').textContent = algorithmHint + (netConsumptionRate > 0
         ? `${algorithm}: allows ${capacity} immediately; default test sends ${requestsToBlock} at ${requestRate} RPS.`
-        : `${algorithm}: requests at ${requestRate} RPS do not exceed its ${refillRate.toFixed(1)} RPS refill rate. Increase RPS to trigger a block.`;
+        : `${algorithm}: requests at ${requestRate} RPS do not exceed its ${refillRate.toFixed(1)} RPS refill rate. Increase RPS to trigger a block.`);
       if (!requestCountCustomized) requestCountInput.value = String(requestsToBlock);
     }
 

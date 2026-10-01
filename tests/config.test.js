@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
@@ -33,4 +34,11 @@ test('invalid Redis URLs are not copied into logs', () => {
   const result = loadConfig({ REDIS_URL: `not-a-redis-url-${secretMarker}` });
   assert.equal(result.status, 0);
   assert.ok(!result.stderr.includes(secretMarker));
+});
+
+test('host-run environment example uses localhost Redis while Compose uses its Redis service', () => {
+  const envExample = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
+  const compose = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.yml'), 'utf8');
+  assert.match(envExample, /^REDIS_URL=redis:\/\/127\.0\.0\.1:6379$/m);
+  assert.match(compose, /REDIS_URL:\s*"redis:\/\/redis:6379"/);
 });
